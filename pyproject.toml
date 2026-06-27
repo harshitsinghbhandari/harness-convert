@@ -1,0 +1,19 @@
+[project]
+name = "harness-convert"
+version = "0.1.0"
+description = "Relocate a coding-agent session across harnesses (Codex <-> Claude Code) and resume it natively."
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Harshit Singh Bhandari", email = "dev@theharshitsingh.com" }]
+dependencies = []  # stdlib only, on purpose: an escape-hatch tool needs zero install friction
+
+[project.scripts]
+hc = "hconv.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hconv"]
