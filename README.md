@@ -32,7 +32,10 @@ A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
 - **Adapters** (`hconv/adapters/`): one per harness, `locate / read / dest_path /
   write`. Codex's writer emits BOTH streams (`response_item` for the model,
   `event_msg` for scrollback incl. `exec_command_end` / `patch_apply_end` tool
-  cards); Claude's single row set serves both.
+  cards); Claude's single row set serves both. OpenCode is SQLite, not JSONL: it
+  reads the `session`/`message`/`part` tables read-only, and writes the canonical
+  `{info, messages}` file that `opencode import` validates and ingests (safer than
+  poking a live WAL DB), so `opencode -s <id>` resumes it.
 - **Ragged-tail close** (`synthesize_missing_results`): the source usually died
   mid-tool-call, so every orphan `ToolCall` gets a synthetic result — else the
   resumed API call rejects the history.
@@ -47,9 +50,11 @@ Stdlib only, no dependencies. `python3 hc.py ...` also works without installing.
 
 ## Supported
 
-Codex (`~/.codex`) ↔ Claude Code (`~/.claude`), both directions. Within a harness,
-sessions are also freely relocatable across working directories (pure metadata
-rewrite, lossless).
+Codex (`~/.codex`), Claude Code (`~/.claude`), and OpenCode
+(`~/.local/share/opencode`) — any direction between them. Converting *into*
+OpenCode writes an import file; resume with `opencode import <file> && opencode -s
+<id>` (the command `hc` prints). Within a harness, sessions are also freely
+relocatable across working directories (pure metadata rewrite, lossless).
 
 ## Test
 

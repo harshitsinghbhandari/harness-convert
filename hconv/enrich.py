@@ -56,3 +56,26 @@ def _claude_to_codex(s: Session) -> None:
 def _codex_to_claude(s: Session) -> None:
     if s.extra.get("title"):
         s.extra.setdefault("out", {})["ai_title"] = s.extra["title"]
+
+
+# OpenCode carries the title as a first-class session column. Into opencode the
+# writer reads out["opencode_title"]; out of opencode we reuse the keys the
+# claude/codex writers already consume (ai_title / thread_name).
+
+@register("claude", "opencode")
+@register("codex", "opencode")
+def _to_opencode(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["opencode_title"] = s.extra["title"]
+
+
+@register("opencode", "claude")
+def _opencode_to_claude(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["ai_title"] = s.extra["title"]
+
+
+@register("opencode", "codex")
+def _opencode_to_codex(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["thread_name"] = s.extra["title"]

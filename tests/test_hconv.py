@@ -18,6 +18,8 @@ from hconv import (AssistantMessage, Session, ToolCall, ToolResult, UserMessage,
 from hconv.enrich import enrich
 from hconv.adapters import claude as claude_mod
 from hconv.adapters import codex as codex_mod
+from hconv.adapters import opencode as opencode_mod
+import sqlite3
 
 CWD = "/Users/x/proj"
 
@@ -131,6 +133,69 @@ def test_title_enrichment(tmp):
     print("PASS title-enrichment: carried both ways, absent for unregistered pair")
 
 
+def test_opencode_write_invariants(tmp):
+    # write() emits the {info, messages} doc `opencode import` validates. Assert
+    # the invariants that import (reverse-engineered) actually enforces.
+    opencode_mod.IMPORTS = Path(tmp) / "oc_imports"
+    s = sample(); s.records = synthesize_missing_results(s.records)
+    dest = opencode_mod.OpenCodeAdapter().write(s, CWD)
+    doc = json.loads(dest.read_text())
+    assert doc["info"]["id"] == s.session_id, "session id must be preserved"
+    assert doc["info"]["directory"] == CWD, "directory not rewritten to dest cwd"
+    assert doc["info"]["summary"] == {"additions": 0, "deletions": 0, "files": 0}
+    pids, tools = set(), []
+    for m in doc["messages"]:
+        info = m["info"]
+        assert info["sessionID"] == s.session_id
+        if info["role"] == "assistant":
+            assert "parentID" in info, "assistant message needs parentID (import rejects otherwise)"
+        for p in m["parts"]:
+            assert p["id"] not in pids, f"duplicate part id {p['id']}"
+            pids.add(p["id"])
+            assert p["messageID"] == info["id"], "part.messageID must match its message"
+            if p["type"] == "tool":
+                tools.append(p["state"]["status"])
+    assert "completed" in tools, "the closed Bash call should be a completed tool part"
+    assert "error" in tools, "the synthesized orphan result should be an error tool part"
+    print(f"PASS opencode-write: id-preserving import doc, {len(tools)} tool parts ({tools})")
+
+
+def _make_oc_db(path, sid, cwd):
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE session(id TEXT, directory TEXT, title TEXT, time_created INT)")
+    con.execute("CREATE TABLE message(id TEXT, session_id TEXT, data TEXT, time_created INT)")
+    con.execute("CREATE TABLE part(id TEXT, message_id TEXT, session_id TEXT, data TEXT, time_created INT)")
+    con.execute("INSERT INTO session VALUES(?,?,?,?)", (sid, cwd, "Fix the failing test", 1777000000000))
+    con.execute("INSERT INTO message VALUES(?,?,?,?)", ("m1", sid, json.dumps({"role": "user"}), 1))
+    con.execute("INSERT INTO message VALUES(?,?,?,?)", ("m2", sid, json.dumps({"role": "assistant"}), 2))
+    con.execute("INSERT INTO part VALUES(?,?,?,?,?)", ("p1", "m1", sid,
+                json.dumps({"type": "text", "text": "fix the failing test"}), 1))
+    con.execute("INSERT INTO part VALUES(?,?,?,?,?)", ("p2", "m2", sid,
+                json.dumps({"type": "reasoning", "text": "secret"}), 1))  # dropped
+    con.execute("INSERT INTO part VALUES(?,?,?,?,?)", ("p3", "m2", sid,
+                json.dumps({"type": "tool", "tool": "bash", "callID": "c1",
+                            "state": {"status": "error", "input": {"command": "pytest"},
+                                      "output": "boom", "time": {"start": 2, "end": 3}}}), 2))
+    con.commit(); con.close()
+
+
+def test_opencode_read(tmp):
+    sid = "ses_readtest0000000000000001"
+    db = Path(tmp) / "oc_read.db"
+    _make_oc_db(str(db), sid, CWD)
+    opencode_mod.DB = db
+    a = opencode_mod.OpenCodeAdapter()
+    s = a.read(a.locate(CWD))                      # locate by cwd, then read
+    assert s.session_id == sid and s.cwd == CWD, "identity not read back"
+    assert s.extra.get("title") == "Fix the failing test", "title not lifted to extra"
+    kinds = [type(r).__name__ for r in s.records]
+    assert kinds == ["UserMessage", "ToolCall", "ToolResult"], f"reasoning not dropped / tool not split: {kinds}"
+    tc = next(r for r in s.records if isinstance(r, ToolCall))
+    tr = next(r for r in s.records if isinstance(r, ToolResult))
+    assert tc.call_id == tr.call_id == "c1" and tr.is_error and tr.output == "boom", "tool call/result mispaired"
+    print(f"PASS opencode-read: {len(s.records)} records, reasoning dropped, error tool split correctly")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
@@ -139,4 +204,6 @@ if __name__ == "__main__":
         test_claude_write_invariants(tmp)
         test_roundtrip_preserves_conversation(tmp)
         test_title_enrichment(tmp)
+        test_opencode_write_invariants(tmp)
+        test_opencode_read(tmp)
     print("\nALL PASS")

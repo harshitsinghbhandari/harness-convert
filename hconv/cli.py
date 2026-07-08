@@ -29,9 +29,11 @@ def cmd_convert(a):
     print(f"records: {len(session.records)}  ({n_tool} tool calls)")
     print(f"dest   : {dest}")
     if a.write:
-        print(f"\nWROTE. resume with:\n  cd {a.dest_cwd or a.cwd} && "
-              + (f"codex resume {session.session_id}" if a.to == "codex"
-                 else f"claude --resume {session.session_id}"))
+        sid, cwd = session.session_id, a.dest_cwd or a.cwd
+        resume = {"codex": f"codex resume {sid}",
+                  "claude": f"claude --resume {sid}",
+                  "opencode": f"opencode import {dest} && opencode -s {sid}"}[a.to]
+        print(f"\nWROTE. resume with:\n  cd {cwd} && {resume}")
     else:
         print("\n(dry run — pass --write to create it)")
 
