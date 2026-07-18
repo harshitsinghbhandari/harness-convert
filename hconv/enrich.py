@@ -7,7 +7,7 @@ adapter's write() will pick up (also via Session.extra).
 
 By design this is optional and sparse: a missing (src, dst) entry just means
 "common-only conversion", which always works. The map never re-encodes the four
-common records — only the extras.
+common records, only the extras.
 
 Example (not yet wired): carry the session title both ways.
 

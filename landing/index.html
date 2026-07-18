@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>hc — move a coding session between agents</title>
+<title>hc: move a coding session between agents</title>
 <meta name="description" content="Your AI coding harness hit a rate limit mid-task. Relocate the session to another harness in 2 seconds and resume where you left off. Codex ↔ Claude Code.">
-<meta property="og:title" content="hc — move a coding session between agents">
+<meta property="og:title" content="hc: move a coding session between agents">
 <meta property="og:description" content="Rate-limited 80% through a fix? Relocate the session to another harness and keep going. Codex ↔ Claude Code, native resume.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='monospace'>↻</text></svg>">
@@ -141,7 +141,7 @@
     <div class="term">
       <div class="term-bar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="term-title">~/project — claude code</span>
+        <span class="term-title">~/project - claude code</span>
       </div>
       <div class="term-body">
 <span class="o">&gt; fixing the failing payments test…</span>
@@ -163,7 +163,7 @@
   <section id="problem">
     <div class="eyebrow">The problem</div>
     <h2>Rate limits don't care that you're 80% done.</h2>
-    <p class="lead">When your agent goes dark mid-task you lose more than time — you can't even
+    <p class="lead">When your agent goes dark mid-task you lose more than time; you can't even
       ask it for a handoff doc, because the thing that would write it is the thing that's down.
       <b style="color:var(--fg)">hc</b> reads the session transcript straight off disk. The dead
       harness never needs to be running, and your quota never needs to come back.</p>
@@ -181,23 +181,23 @@
     <div class="eyebrow">How it works</div>
     <h2>A session is three streams. hc maps all three.</h2>
     <p class="lead">One common interface every harness must satisfy, plus a sparse map for the
-      extras — so any pair converts, and special pairs convert <em>richer</em>.</p>
+      extras, so any pair converts, and special pairs convert <em>richer</em>.</p>
     <div class="grid">
       <div class="card">
         <h3><span class="n">1</span> Common interface</h3>
-        <p>Every harness maps to four records — user message, assistant reply,
+        <p>Every harness maps to four records: user message, assistant reply,
           <code>ToolCall</code>, <code>ToolResult</code>. The universal floor that
           guarantees any pair resumes.</p>
       </div>
       <div class="card">
         <h3><span class="n">2</span> N&sup2; enrichment</h3>
-        <p>Surplus the floor can't hold — session titles, modes — rides a sparse
+        <p>Surplus the floor can't hold (session titles, modes) rides a sparse
           <code>(from, to)</code> map, layered on top. Never re-encodes the common stuff.</p>
       </div>
       <div class="card">
         <h3><span class="n">3</span> Dual streams</h3>
-        <p>Writes both the model-context stream <em>and</em> the UI scrollback — including
-          <code>exec</code> and <code>diff</code> tool cards — so history renders, not just resumes.</p>
+        <p>Writes both the model-context stream <em>and</em> the UI scrollback (including
+          <code>exec</code> and <code>diff</code> tool cards) so history renders, not just resumes.</p>
       </div>
       <div class="card">
         <h3><span class="n">4</span> Ragged tails</h3>

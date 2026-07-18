@@ -1,7 +1,7 @@
 """OpenCode adapter.
 
 Storage is SQLite, not JSONL: $XDG_DATA_HOME/opencode/opencode.db, with three
-tables — session, message, part — whose `data` columns hold JSON. A `tool` part
+tables (session, message, part) whose `data` columns hold JSON. A `tool` part
 bundles the call AND its result together (state.input / state.output /
 state.status), where Codex/Claude keep them as two separate records; read()
 splits it back into our ToolCall + ToolResult, write() fuses them.

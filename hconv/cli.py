@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hc — relocate a coding-agent session across harnesses.
+"""hc: relocate a coding-agent session across harnesses.
 
 Escape hatch: your harness hit a wall (rate limit, outage) mid-task. Move the
 session to a live harness and keep going. Reads transcripts off disk; the source
@@ -35,7 +35,7 @@ def cmd_convert(a):
                   "opencode": f"opencode import {dest} && opencode -s {sid}"}[a.to]
         print(f"\nWROTE. resume with:\n  cd {cwd} && {resume}")
     else:
-        print("\n(dry run — pass --write to create it)")
+        print("\n(dry run; pass --write to create it)")
 
 
 def cmd_list(a):

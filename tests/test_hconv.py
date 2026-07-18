@@ -25,7 +25,7 @@ CWD = "/Users/x/proj"
 
 
 def sample():
-    # a session that died mid-tool-call (orphan c2) — the escape-hatch normal case
+    # a session that died mid-tool-call (orphan c2), the escape-hatch normal case
     return Session("test", "1111-2222-3333-4444-5555", CWD, [
         UserMessage("fix the failing test", "2026-06-27T01:00:00Z"),
         AssistantMessage("looking now", "2026-06-27T01:00:01Z"),

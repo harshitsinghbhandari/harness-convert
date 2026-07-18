@@ -22,7 +22,7 @@ exact `codex resume` / `claude --resume` command.
 A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
 **(c)** identity metadata. Conversion maps all three.
 
-- **Common interface** (`hconv/common.py`): every harness maps to four records —
+- **Common interface** (`hconv/common.py`): every harness maps to four records:
   `UserMessage`, `AssistantMessage`, `ToolCall`, `ToolResult`. This universal floor
   guarantees any pair converts and resumes. Private reasoning is dropped (each
   harness encrypts/owns its own; unrecoverable).
@@ -37,21 +37,24 @@ A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
   `{info, messages}` file that `opencode import` validates and ingests (safer than
   poking a live WAL DB), so `opencode -s <id>` resumes it.
 - **Ragged-tail close** (`synthesize_missing_results`): the source usually died
-  mid-tool-call, so every orphan `ToolCall` gets a synthetic result — else the
+  mid-tool-call, so every orphan `ToolCall` gets a synthetic result, else the
   resumed API call rejects the history.
 
 ## Install
 
 ```bash
-pipx install .     # or: pip install -e .
+pipx install harness-convert                            # PyPI
+npm i -g harness-convert                                # npm (needs python3 on PATH)
+brew install harshitsinghbhandari/tap/harness-convert   # Homebrew
 ```
 
-Stdlib only, no dependencies. `python3 hc.py ...` also works without installing.
+Stdlib only, no dependencies. From a checkout, `pipx install .` or plain
+`python3 hc.py ...` also work.
 
 ## Supported
 
 Codex (`~/.codex`), Claude Code (`~/.claude`), and OpenCode
-(`~/.local/share/opencode`) — any direction between them. Converting *into*
+(`~/.local/share/opencode`): any direction between them. Converting *into*
 OpenCode writes an import file; resume with `opencode import <file> && opencode -s
 <id>` (the command `hc` prints). Within a harness, sessions are also freely
 relocatable across working directories (pure metadata rewrite, lossless).

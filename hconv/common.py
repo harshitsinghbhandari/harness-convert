@@ -85,6 +85,6 @@ def synthesize_missing_results(records: list[Record]) -> list[Record]:
         out.append(r)
         if isinstance(r, ToolCall) and r.call_id not in have:
             out.append(ToolResult(r.call_id,
-                                  "[no output — source session ended here]",
+                                  "[no output; source session ended here]",
                                   ts=r.ts, is_error=True))
     return out
