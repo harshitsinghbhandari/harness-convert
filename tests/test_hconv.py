@@ -147,13 +147,19 @@ def test_opencode_write_invariants(tmp):
     s = sample(); s.records = synthesize_missing_results(s.records)
     dest = opencode_mod.OpenCodeAdapter().write(s, CWD)
     doc = json.loads(dest.read_text())
-    assert doc["info"]["id"] == s.session_id, "session id must be preserved"
+    # opencode requires ses_-prefixed session ids (`opencode -s` validates the
+    # prefix; import does not, and an invalid id imports fine but can't resume)
+    oc_id = doc["info"]["id"]
+    assert oc_id.startswith("ses_"), f"opencode session id must be ses_-prefixed: {oc_id}"
+    assert s.extra.get("dest_session_id") == oc_id, "cli needs the converted id for the resume hint"
+    doc2 = json.loads(opencode_mod.OpenCodeAdapter().write(s, CWD).read_text())
+    assert doc2["info"]["id"] == oc_id, "id must be deterministic so re-import upserts"
     assert doc["info"]["directory"] == CWD, "directory not rewritten to dest cwd"
     assert doc["info"]["summary"] == {"additions": 0, "deletions": 0, "files": 0}
     pids, tools = set(), []
     for m in doc["messages"]:
         info = m["info"]
-        assert info["sessionID"] == s.session_id
+        assert info["sessionID"] == oc_id
         if info["role"] == "assistant":
             assert "parentID" in info, "assistant message needs parentID (import rejects otherwise)"
         for p in m["parts"]:

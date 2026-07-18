@@ -29,7 +29,9 @@ def cmd_convert(a):
     print(f"records: {len(session.records)}  ({n_tool} tool calls)")
     print(f"dest   : {dest}")
     if a.write:
-        sid, cwd = session.session_id, a.dest_cwd or a.cwd
+        # a dest harness may map the id to its own format (opencode: ses_...)
+        sid = session.extra.get("dest_session_id", session.session_id)
+        cwd = a.dest_cwd or a.cwd
         resume = {"codex": f"codex resume {sid}",
                   "claude": f"claude --resume {sid}",
                   "opencode": f"opencode import {dest} && opencode -s {sid}"}[a.to]

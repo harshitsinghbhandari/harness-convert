@@ -9,7 +9,9 @@ splits it back into our ToolCall + ToolResult, write() fuses them.
 Read is direct + read-only (the dead source harness never has to run). Write does
 NOT poke the live DB (FK to project, WAL, drizzle schema drift = corruption risk);
 it emits the canonical `{info, messages}` interchange file that `opencode import`
-validates and ingests, preserving the id so `opencode -s <id>` resumes it.
+validates and ingests. Session ids must be ses_-prefixed (`opencode -s` enforces
+the prefix; import does not), so foreign ids are mapped to a deterministic
+ses_<sha1> and the CLI prints the mapped id in the resume hint.
 
 Times on disk are epoch-milliseconds ints; the common records carry ISO strings
 (what Codex/Claude use), so we convert on the boundary in both directions.
@@ -164,7 +166,11 @@ class OpenCodeAdapter(Adapter):
         return IMPORTS / f"{session.session_id}.json"
 
     def write(self, session: Session, dest_cwd: str) -> Path:
-        sid = session.session_id
+        # opencode session ids must start with ses_; map foreign ids
+        # deterministically so re-importing upserts instead of duplicating.
+        sid = (session.session_id if session.session_id.startswith("ses_")
+               else _id("ses_", session.session_id))
+        session.extra["dest_session_id"] = sid
         model = _default_model()
         results = {r.call_id: r for r in session.records
                    if isinstance(r, ToolResult)}
