@@ -44,7 +44,7 @@ A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
 
 ```bash
 pipx install harness-convert                            # PyPI
-npm i -g harness-convert                                # npm (needs python3 on PATH)
+npm i -g @theharshitsingh/hc                            # npm (needs python3 on PATH)
 brew install harshitsinghbhandari/tap/harness-convert   # Homebrew
 ```
 
