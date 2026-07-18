@@ -51,7 +51,14 @@ def test_codex_write_invariants(tmp):
     dest = codex_mod.CodexAdapter().write(s, CWD)
     lines = [json.loads(l) for l in dest.read_text().splitlines()]
     assert lines[0]["type"] == "session_meta", "first line must be session_meta"
-    assert lines[0]["payload"]["cwd"] == CWD, "cwd not rewritten"
+    meta = lines[0]["payload"]
+    assert meta["cwd"] == CWD, "cwd not rewritten"
+    # codex >= 0.144 builds its threads-db row from session_meta; model_provider
+    # is NOT NULL there and an absent value backfills as "" which kills TUI
+    # resume with: Model provider `` not found
+    assert meta.get("model_provider"), "session_meta needs a model_provider"
+    assert meta.get("session_id") == meta["id"], "session_id must mirror id"
+    assert meta.get("source") and meta.get("thread_source"), "0.144 identity fields missing"
     calls = [l["payload"]["call_id"] for l in lines if l["payload"].get("type") == "function_call"]
     outs = {l["payload"]["call_id"] for l in lines if l["payload"].get("type") == "function_call_output"}
     assert all(c in outs for c in calls), "unpaired function_call (resume would reject)"

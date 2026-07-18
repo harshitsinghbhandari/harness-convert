@@ -19,7 +19,13 @@ from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
 
 SESSIONS = Path(os.path.expanduser("~/.codex/sessions"))
 INDEX = Path(os.path.expanduser("~/.codex/session_index.jsonl"))
-CLI_VERSION = "0.142.2"
+CLI_VERSION = "0.144.5"
+# codex >= 0.144 registers every rollout in its threads db (state_5.sqlite),
+# building the row from session_meta. model_provider is NOT NULL there; if the
+# meta omits it the row backfills as "" and TUI resume dies with
+# "Model provider `` not found". ponytail: hardcoded stock provider, read the
+# user's config.toml if custom providers ever matter.
+MODEL_PROVIDER = "openai"
 
 # Claude tool vocabulary -> Codex's. (Cosmetic: history is context, not re-run.)
 INBOUND_NAMES = {"Bash": "shell", "Edit": "apply_patch", "Write": "apply_patch",
@@ -176,9 +182,12 @@ class CodexAdapter(Adapter):
                     tool_card(calls[r.call_id], r, ts)
 
         meta = {"timestamp": session.started_at, "type": "session_meta",
-                "payload": {"id": session.session_id, "timestamp": session.started_at,
+                "payload": {"id": session.session_id, "session_id": session.session_id,
+                            "timestamp": session.started_at,
                             "cwd": dest_cwd, "originator": "codex-cli",
                             "cli_version": CLI_VERSION, "instructions": None,
+                            "source": "cli", "thread_source": "user",
+                            "model_provider": MODEL_PROVIDER,
                             **({"git": {"branch": session.git_branch}} if session.git_branch else {})}}
         dest = self.dest_path(session, dest_cwd)
         dest.parent.mkdir(parents=True, exist_ok=True)
