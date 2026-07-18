@@ -1,0 +1,65 @@
+name: Release
+
+# Push a tag like v0.2.1 and everything ships: GitHub release, PyPI, npm,
+# and the Homebrew tap. PyPI and npm use OIDC trusted publishing (no tokens);
+# the tap push needs a TAP_TOKEN secret (fine-grained PAT, contents:write on
+# harshitsinghbhandari/homebrew-tap).
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # OIDC for PyPI and npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check versions match the tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$TAG\"$" pyproject.toml
+          node -e "process.exit(require('./package.json').version === '$TAG' ? 0 : 1)"
+
+      - name: Run tests
+        run: python3 tests/test_hconv.py
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        run: npm publish
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SHA=$(sha256sum "dist/harness_convert-$TAG.tar.gz" | cut -d' ' -f1)
+          sed -i \
+            -e "s|download/v[0-9.]*/harness_convert-[0-9.]*\.tar\.gz|download/$GITHUB_REF_NAME/harness_convert-$TAG.tar.gz|" \
+            -e "s|sha256 \".*\"|sha256 \"$SHA\"|" \
+            packaging/homebrew/harness-convert.rb
+          EXISTING=$(gh api repos/harshitsinghbhandari/homebrew-tap/contents/Formula/harness-convert.rb -q .sha || true)
+          gh api repos/harshitsinghbhandari/homebrew-tap/contents/Formula/harness-convert.rb -X PUT \
+            -f message="harness-convert $TAG" \
+            -f content="$(base64 -w0 packaging/homebrew/harness-convert.rb)" \
+            ${EXISTING:+-f sha=$EXISTING}
