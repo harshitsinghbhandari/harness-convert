@@ -6,8 +6,8 @@ class HarnessConvert < Formula
 
   desc "Relocate a coding-agent session across harnesses and resume it natively"
   homepage "https://hc.agentlab.in"
-  url "https://github.com/harshitsinghbhandari/harness-convert/releases/download/v0.2.0/harness_convert-0.2.0.tar.gz"
-  sha256 "f97b15565585cc786bbfae7419652cf61f0fd6e5d561a112648d521f1e175967"
+  url "https://github.com/harshitsinghbhandari/harness-convert/releases/download/v0.2.1/harness_convert-0.2.1.tar.gz"
+  sha256 "40b73104a134dbd1380f0d2544f1fa626ffa0b2db3af94960640e9b2362ad67e"
   license "MIT"
 
   depends_on "python@3.14"
