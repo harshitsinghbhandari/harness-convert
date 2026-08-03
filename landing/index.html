@@ -34,9 +34,9 @@
 
   <h2 id="synopsis"><a href="#synopsis">SYNOPSIS</a></h2>
   <div class="ind">
-    <pre><b>hc</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>--write</b>] [<b>--cwd</b> <u>DIR</u>] [<b>--dest-cwd</b> <u>DIR</u>]
-<b>hc convert</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>--write</b>] ...
-<b>hc list</b> --from <u>HARNESS</u> [<b>-n</b> <u>N</u>] [<b>--cwd</b> <u>DIR</u>]</pre>
+    <pre><b>hc</b>                                              <span class="dim"># interactive wizard (TTY)</span>
+<b>hc</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>-y</b>|<b>--write</b>] ...
+<b>hc list</b> --from <u>HARNESS</u> [<b>-n</b> <u>N</u>]                 <span class="dim"># TTY: pick then convert</span></pre>
   </div>
 
   <h2 id="description"><a href="#description">DESCRIPTION</a></h2>
@@ -76,8 +76,13 @@
       Default: same as <b>--cwd</b>. Use this to relocate a session across
       folders inside one harness (lossless metadata rewrite).</p>
     <p><b>-n</b> <u>N</u>, <b>--n</b> <u>N</u><br>
-      For <b>hc list</b> only: how many newest sessions to show. Default: 10.
-      Output is session id, UTC time, and title when available.</p>
+      How many newest sessions to list or offer in a picker. Default: 10
+      (<b>list</b>) or 15 (<b>convert</b> pick).</p>
+    <p><b>-y</b>, <b>--yes</b><br>
+      Write without asking. Same as answering yes to the TTY confirm.</p>
+    <p><b>--no-interactive</b><br>
+      Never prompt. Also set <b>HC_NO_INTERACTIVE=1</b>. Pipes are
+      non-interactive automatically.</p>
   </div>
 
   <h2 id="examples"><a href="#examples">EXAMPLES</a></h2>
@@ -196,7 +201,7 @@ dest   : ~/.codex/sessions/.../rollout-...-ce0dc35e....jsonl
       <a href="https://agentlab.in">agentlab.in</a></p>
   </div>
 
-  <div class="manfoot"><span>harness-convert 0.4.0</span><span>2026-08-03</span><span>HC(1)</span></div>
+  <div class="manfoot"><span>harness-convert 0.5.0</span><span>2026-08-03</span><span>HC(1)</span></div>
 
 </div>
 <script>

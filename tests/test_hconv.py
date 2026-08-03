@@ -4,6 +4,7 @@ No dependency on real ~/.codex / ~/.claude data: we redirect the adapters' store
 paths to a temp dir, write a synthetic session through each harness, read it back,
 and assert the structural invariants that native resume actually requires.
 """
+import io
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -693,6 +695,91 @@ def test_list_sessions(tmp):
     print("PASS list-sessions: claude+grok newest-first, limit, titles")
 
 
+def test_ui_helpers():
+    from hconv import ui
+    import io
+    from unittest import mock
+
+    # HC_NO_INTERACTIVE forces can_interact off even if TTYs look real.
+    with mock.patch.dict(os.environ, {"HC_NO_INTERACTIVE": "1"}, clear=False):
+        assert ui.can_interact(True) is False
+    with mock.patch.dict(os.environ, {"HC_NO_INTERACTIVE": ""}, clear=False):
+        with mock.patch.object(sys, "stdin") as stdin, mock.patch.object(sys, "stdout") as stdout:
+            stdin.isatty.return_value = True
+            stdout.isatty.return_value = True
+            assert ui.can_interact(True) is True
+            assert ui.can_interact(False) is False
+            stdin.isatty.return_value = False
+            assert ui.can_interact(True) is False
+
+    # Numbered picker: empty input → default; "2" → index 1; "q" → SystemExit.
+    opts = ["alpha", "beta", "gamma"]
+    with mock.patch("builtins.input", return_value=""):
+        assert ui._pick_numbered(opts, default=1) == 1
+    with mock.patch("builtins.input", return_value="2"):
+        assert ui._pick_numbered(opts, default=0) == 1
+    with mock.patch("builtins.input", return_value="q"):
+        try:
+            ui._pick_numbered(opts, default=0)
+            raise AssertionError("expected SystemExit on q")
+        except SystemExit:
+            pass
+
+    with mock.patch("builtins.input", return_value="y"):
+        assert ui.confirm("go?", default=False) is True
+    with mock.patch("builtins.input", return_value=""):
+        assert ui.confirm("go?", default=False) is False
+        assert ui.confirm("go?", default=True) is True
+
+    # NO_COLOR disables color escapes.
+    with mock.patch.dict(os.environ, {"NO_COLOR": "1"}, clear=False):
+        assert ui.use_color() is False
+        assert ui.bold("x") == "x"
+
+    print("PASS ui-helpers: interact flags, numbered pick, confirm, NO_COLOR")
+
+
+def test_cli_noninteractive_convert(tmp):
+    """Fully-flagged convert still works with no TTY / no prompts."""
+    from hconv.adapters import claude as claude_mod
+    from hconv.adapters import codex as codex_mod
+    import hconv.cli as cli_mod
+
+    claude_mod.PROJECTS = Path(tmp) / "claude"
+    codex_mod.SESSIONS = Path(tmp) / "codex"
+    codex_mod.INDEX = Path(tmp) / "codex_index.jsonl"
+    # Seed a claude session via write from sample.
+    s = sample()
+    s.records = synthesize_missing_results(s.records)
+    s.extra["title"] = "Fix the failing test"
+    claude_mod.ClaudeAdapter().write(s, CWD)
+
+    buf = io.StringIO()
+    with mock.patch.dict(os.environ, {"HC_NO_INTERACTIVE": "1"}, clear=False):
+        with mock.patch("sys.stdout", buf):
+            cli_mod.run_convert(
+                from_h="claude", to_h="codex", cwd=CWD, dest_cwd=CWD,
+                session_id=None, write=False, yes=False,
+                interactive=False, pick_limit=10,
+            )
+    out = buf.getvalue()
+    assert "from" in out and "codex" in out
+    assert "dry run" in out
+    assert "WROTE" not in out
+
+    buf2 = io.StringIO()
+    with mock.patch("sys.stdout", buf2):
+        cli_mod.run_convert(
+            from_h="claude", to_h="codex", cwd=CWD, dest_cwd=CWD,
+            session_id=None, write=False, yes=True,
+            interactive=False, pick_limit=10,
+        )
+    out2 = buf2.getvalue()
+    assert "WROTE" in out2
+    assert "codex resume" in out2
+    print("PASS cli-noninteractive-convert: dry-run and -y write paths")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
@@ -711,4 +798,6 @@ if __name__ == "__main__":
         test_grok_roundtrip(tmp)
         test_grok_read_and_locate(tmp)
         test_list_sessions(tmp)
+        test_ui_helpers()
+        test_cli_noninteractive_convert(tmp)
     print("\nALL PASS")

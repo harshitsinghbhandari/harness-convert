@@ -8,15 +8,19 @@ transcript off disk (the dead harness doesn't need to be running or your quota
 intact), rewrites it into the target harness's format, and you keep going there.
 
 ```bash
-hc --from claude --to codex                 # move the latest Claude session here -> Codex
+hc                                          # interactive wizard (TTY): pick from/session/to
+hc --from claude --to codex                 # dry-run latest; TTY asks before write
+hc --from claude --to codex -y              # write without prompting
 hc --from codex  --to claude <session-id>   # a specific session
 hc --from claude --to codex --dest-cwd DIR  # land it in a different folder
-hc list --from codex                        # newest convertible sessions for this cwd
-hc list --from claude -n 5                  # newest 5 (id / time / title)
+hc list --from claude -n 5                  # newest 5; TTY: pick one and convert
+hc list --from claude --no-interactive      # plain table (also when piped)
 ```
 
-By default it's a dry run; pass `--write` to create the file, then it prints the
-exact `codex resume` / `claude --resume` command.
+By default it's a dry run. Pass `--write` or `-y` to create the file (or confirm
+when prompted on a TTY). It then prints the exact resume command. Flags always
+win; missing pieces prompt only on an interactive TTY. Stdlib only; set
+`HC_NO_INTERACTIVE=1` to force non-interactive mode.
 
 ## How it works
 
