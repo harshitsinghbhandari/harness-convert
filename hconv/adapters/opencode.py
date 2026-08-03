@@ -174,7 +174,7 @@ class OpenCodeAdapter(Adapter):
         model = _default_model()
         results = {r.call_id: r for r in session.records
                    if isinstance(r, ToolResult)}
-        consumed: set[str] = set()
+        call_ids = {r.call_id for r in session.records if isinstance(r, ToolCall)}
 
         def text_part(mid, i, text):
             return {"type": "text", "text": text, "id": _id("prt_", sid, mid, i),
@@ -182,7 +182,6 @@ class OpenCodeAdapter(Adapter):
 
         def tool_part(mid, i, call: ToolCall):
             res = results.get(call.call_id)
-            consumed.add(call.call_id)
             name = INBOUND_NAMES.get(call.name, call.name.lower())
             ms = _ms(call.ts) or _ms(session.started_at)
             time = {"start": ms, "end": _ms(res.ts) if res else ms}
@@ -203,7 +202,7 @@ class OpenCodeAdapter(Adapter):
         side = None
         for r in session.records:
             s = "user" if isinstance(r, UserMessage) else "assistant"
-            if isinstance(r, ToolResult) and r.call_id in consumed:
+            if isinstance(r, ToolResult) and r.call_id in call_ids:
                 continue  # already fused into its ToolCall's tool part
             if s != side:
                 runs.append((s, [])); side = s

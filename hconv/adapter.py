@@ -20,9 +20,15 @@ from .common import Session, synthesize_missing_results
 
 
 class Adapter(ABC):
-    """A harness's reader/writer/locator. Subclasses set `name` and register()."""
+    """A harness's reader/writer/locator. Subclasses set `name` and register().
+
+    locate/read are mandatory; dest_path/write are not. A harness whose store we
+    can only safely READ (cursor) sets `writable = False` and inherits the
+    refusing defaults below, so it can be a --from and never a --to.
+    """
 
     name: str
+    writable: bool = True
 
     @abstractmethod
     def locate(self, cwd: str, session_id: str | None = None) -> Path:
@@ -35,16 +41,18 @@ class Adapter(ABC):
         """Parse a transcript file into the common Session. Drops private
         reasoning; stashes harness surplus into Session.extra for enrichment."""
 
-    @abstractmethod
     def dest_path(self, session: Session, dest_cwd: str) -> Path:
         """Where a converted Session WOULD be written under dest_cwd. Pure; no IO.
         Used for dry-run and so write() and the dry-run path never disagree."""
+        raise SystemExit(f"{self.name} sessions are read-only; "
+                         f"hc cannot convert INTO {self.name}")
 
-    @abstractmethod
     def write(self, session: Session, dest_cwd: str) -> Path:
         """Materialize a Session as this harness's transcript at dest_path(),
         rewriting identity (id/cwd) so the result is self-consistent and natively
         resumable. Returns the written path."""
+        raise SystemExit(f"{self.name} sessions are read-only; "
+                         f"hc cannot convert INTO {self.name}")
 
 
 _REGISTRY: dict[str, Adapter] = {}
@@ -65,6 +73,11 @@ def get(name: str) -> Adapter:
 
 def known() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def writable() -> list[str]:
+    """Harnesses hc can convert INTO. Read-only ones (cursor) are --from only."""
+    return sorted(n for n, a in _REGISTRY.items() if a.writable)
 
 
 def convert(src_name: str, dst_name: str, cwd: str, dest_cwd: str,

@@ -1,2 +1,2 @@
 """Importing this package registers every adapter."""
-from . import claude, codex, opencode  # noqa: F401
+from . import claude, codex, cursor, opencode  # noqa: F401

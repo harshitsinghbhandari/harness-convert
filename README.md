@@ -35,7 +35,9 @@ A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
   cards); Claude's single row set serves both. OpenCode is SQLite, not JSONL: it
   reads the `session`/`message`/`part` tables read-only, and writes the canonical
   `{info, messages}` file that `opencode import` validates and ingests (safer than
-  poking a live WAL DB), so `opencode -s <id>` resumes it.
+  poking a live WAL DB), so `opencode -s <id>` resumes it. Cursor is a
+  content-addressed protobuf blob tree inside SQLite; the adapter walks it from
+  the current root, and is read-only (`writable = False`, enforced at the CLI).
 - **Ragged-tail close** (`synthesize_missing_results`): the source usually died
   mid-tool-call, so every orphan `ToolCall` gets a synthetic result, else the
   resumed API call rejects the history.
@@ -58,6 +60,12 @@ Codex (`~/.codex`), Claude Code (`~/.claude`), and OpenCode
 OpenCode writes an import file; resume with `opencode import <file> && opencode -s
 <id>` (the command `hc` prints). Within a harness, sessions are also freely
 relocatable across working directories (pure metadata rewrite, lossless).
+
+Cursor (`~/.cursor/chats`) is a **source only**: `--from cursor` works, `--to
+cursor` is rejected. `cursor-agent` has no import command, so writing a session
+would mean authoring its undocumented protobuf blob tree with nothing to
+validate the result against. Reading is full fidelity, tool outputs included.
+See `docs/cursor-format.md`.
 
 ## Test
 

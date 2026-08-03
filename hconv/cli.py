@@ -10,13 +10,15 @@ harness does NOT need to be running or your quota intact.
     hc --from claude --to codex --cwd DIR  # source/dest folder (default: pwd)
     hc list --from codex                   # what's convertible for this cwd
 
+cursor is read-only: it can be a --from, never a --to.
+
 By default prints what it WOULD do; pass --write to actually create the file.
 """
 import argparse
 import os
 import sys
 
-from hconv import convert, get, known
+from hconv import convert, get, known, writable
 
 
 def cmd_convert(a):
@@ -61,7 +63,10 @@ def main():
 
     c = sub.add_parser("convert", help="move a session to another harness")
     add_common(c)
-    c.add_argument("--to", required=True, choices=known(), help="destination harness")
+    # --to is writable-only: read-only harnesses (cursor) fail at argparse rather
+    # than after a successful read.
+    c.add_argument("--to", required=True, choices=writable(),
+                   help="destination harness")
     c.add_argument("session_id", nargs="?", help="session id (default: latest for cwd)")
     c.add_argument("--dest-cwd", help="destination folder (default: same as --cwd)")
     c.add_argument("--write", action="store_true", help="actually write the file")

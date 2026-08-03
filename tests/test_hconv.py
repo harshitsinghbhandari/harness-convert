@@ -8,6 +8,8 @@ import json
 import os
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,6 +21,8 @@ from hconv.enrich import enrich
 from hconv.adapters import claude as claude_mod
 from hconv.adapters import codex as codex_mod
 from hconv.adapters import opencode as opencode_mod
+from hconv.adapters import cursor as cursor_mod
+import hashlib
 import sqlite3
 
 CWD = "/Users/x/proj"
@@ -209,6 +213,273 @@ def test_opencode_read(tmp):
     print(f"PASS opencode-read: {len(s.records)} records, reasoning dropped, error tool split correctly")
 
 
+def _make_cursor_session(d, agent_id, messages, meta_json=None):
+    """A Cursor session dir: content-addressed blobs + a protobuf root listing the
+    child hashes in order, exactly as Cursor lays it out on disk."""
+    d.mkdir(parents=True)
+    if meta_json is not None:
+        (d / "meta.json").write_text(json.dumps(meta_json))
+    blobs = {}
+
+    def put(data: bytes) -> str:
+        h = hashlib.sha256(data).hexdigest()
+        blobs[h] = data
+        return h
+
+    # root: repeated field 1 (wire type 2, always 32 bytes) = child sha256s
+    root = b"".join(b"\x0a\x20" + bytes.fromhex(put(json.dumps(m).encode()))
+                    for m in messages)
+    root += b"\x50\x01"                            # field 10 varint: ignored surplus
+    root_id = put(root)
+    con = sqlite3.connect(d / "store.db")
+    con.execute("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
+    con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany("INSERT INTO blobs VALUES(?,?)", blobs.items())
+    hdr = json.dumps({"agentId": agent_id, "latestRootBlobId": root_id,
+                      "name": "Hello There", "createdAt": 1785695807732}).encode()
+    con.execute("INSERT INTO meta VALUES('0',?)", (hdr.hex(),))
+    con.commit(); con.close()
+
+
+def test_cursor_read(tmp):
+    chats = Path(tmp) / "cursor_chats"
+    cursor_mod.CHATS = chats
+    proj = chats / hashlib.md5(CWD.encode()).hexdigest()
+    _make_cursor_session(proj / "aaaaaaaa-0000-0000-0000-000000000001", "sess-1", [
+        {"role": "system", "content": "You are an AI coding assistant"},
+        # the environment preamble: the only user turn stored as a bare string
+        {"role": "user", "content": "<user_info>\nOS Version: darwin\n</user_info>"},
+        {"role": "user", "content": [
+            {"type": "text", "text": "<system_reminder>noise</system_reminder>"},
+            {"type": "text", "text": "<timestamp>x</timestamp>\n<user_query>\n"
+                                     "fix the failing test\n</user_query>"}]},
+        {"role": "assistant", "content": [
+            {"type": "reasoning", "text": "secret", "signature": "sig"},   # dropped
+            {"type": "text", "text": "looking now"},
+            {"type": "tool-call", "toolCallId": "call-1\nfc_1", "toolName": "Shell",
+             "args": {"command": "pytest"}}]},
+        {"role": "tool", "content": [
+            {"type": "tool-result", "toolCallId": "call-1\nfc_1", "toolName": "Shell",
+             "result": "1 failed"}]},
+        {"role": "assistant", "content": [
+            {"type": "redacted-reasoning", "data": "zzz"},                 # dropped
+            {"type": "tool-call", "toolCallId": "call-2\nfc_2",
+             "toolName": "CallMcpTool", "args": {"name": "codegraph"}}]},
+        {"role": "tool", "content": [
+            {"type": "tool-result", "toolCallId": "call-2\nfc_2",
+             "toolName": "CallMcpTool", "result": "Error: Tool execution failed"}]},
+    ], meta_json={"schemaVersion": 1, "createdAtMs": 1785695807732,
+                  "hasConversation": True, "title": "Hello There",
+                  "updatedAtMs": 1785695950093, "cwd": CWD})
+    # a subagent: store.db but NO meta.json. Newer, so it would win on recency.
+    sub = proj / "bbbbbbbb-0000-0000-0000-000000000002"
+    _make_cursor_session(sub, "sess-2", [
+        {"role": "user", "content": [{"type": "text",
+                                      "text": "<user_query>\nsub task\n</user_query>"}]}])
+
+    a = cursor_mod.CursorAdapter()
+    d = a.locate(CWD)                              # locate by cwd, then read
+    assert d.name.startswith("aaaaaaaa"), f"locate picked the subagent: {d}"
+    s = a.read(d)
+    assert s.cwd == CWD and s.session_id == "sess-1", "identity not read back"
+    assert s.extra.get("title") == "Hello There", "title not lifted to extra"
+    assert s.started_at == "2026-08-02T18:36:47.732000Z", s.started_at
+    kinds = [type(r).__name__ for r in s.records]
+    assert kinds == ["UserMessage", "AssistantMessage", "ToolCall", "ToolResult",
+                     "ToolCall", "ToolResult"], f"system/preamble/reasoning kept: {kinds}"
+    assert s.records[0].text == "fix the failing test", \
+        f"<user_query> not unwrapped: {s.records[0].text!r}"
+    assert s.records[2].name == "Bash", "Shell not mapped to Bash"
+    assert s.records[2].call_id == s.records[3].call_id == "call-1\nfc_1", "mispaired"
+    assert s.records[3].output == "1 failed" and not s.records[3].is_error
+    assert s.records[5].is_error, "Error:-prefixed result should flag is_error"
+
+    # a subagent transcript is unreachable through locate() but readable directly
+    assert a.locate(CWD, "aaaaaaaa").name.startswith("aaaaaaaa"), "substring id lookup"
+    try:
+        a.locate(CWD, "bbbbbbbb"); raise AssertionError("locate found a subagent")
+    except SystemExit:
+        pass
+    assert [r.text for r in a.read(sub).records] == ["sub task"], "subagent unreadable"
+
+    # read-only: no write path exists, and --to can never offer it
+    for call in (lambda: a.write(s, CWD), lambda: a.dest_path(s, CWD)):
+        try:
+            call(); raise AssertionError("read-only adapter must refuse to write")
+        except SystemExit as e:
+            assert "read-only" in str(e), e
+    assert not a.writable and "cursor" in hconv.known() and "cursor" not in hconv.writable()
+    print(f"PASS cursor-read: {len(s.records)} records, subagent excluded, write refused")
+
+
+def test_opencode_no_duplicate_output(tmp):
+    # write() used to double-emit a ToolResult: once fused into its ToolCall's
+    # tool part (state.output), and again as a bare text part. Pin the fix, and
+    # pin that the orphan case (no matching ToolCall) still surfaces as text.
+    opencode_mod.IMPORTS = Path(tmp) / "oc_no_dup"
+    s = Session("test", "dup-test-0001", CWD, [
+        UserMessage("do it", "2026-06-27T02:00:00Z"),
+        AssistantMessage("ok", "2026-06-27T02:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-06-27T02:00:02Z"),
+        ToolResult("c1", "file.txt", "2026-06-27T02:00:03Z"),
+        ToolResult("c2", "orphan-output", "2026-06-27T02:00:04Z"),  # orphan: no ToolCall
+        AssistantMessage("done", "2026-06-27T02:00:05Z"),
+    ], git_branch="main", started_at="2026-06-27T02:00:00Z")
+
+    dest = opencode_mod.OpenCodeAdapter().write(s, CWD)
+    raw = dest.read_text()
+    assert raw.count("file.txt") == 1, \
+        f"'file.txt' should appear exactly once in the written doc, found {raw.count('file.txt')}"
+
+    doc = json.loads(raw)
+    tool_parts, text_parts = [], []
+    for m in doc["messages"]:
+        for p in m["parts"]:
+            if p["type"] == "tool":
+                tool_parts.append(p)
+            elif p["type"] == "text":
+                text_parts.append(p)
+
+    matched = next((p for p in tool_parts if p["state"].get("output") == "file.txt"), None)
+    assert matched is not None, "fused ToolResult output missing from its tool part's state.output"
+    assert not any(p["text"] == "file.txt" for p in text_parts), \
+        "ToolResult output leaked as a duplicate bare text part"
+    assert any(p["text"] == "orphan-output" for p in text_parts), \
+        "orphan ToolResult (no matching ToolCall) should still be emitted as a text part"
+    print("PASS opencode-no-duplicate-output: fused output not duplicated, orphan result still surfaced")
+
+
+def test_claude_title_and_timestamps(tmp):
+    proj = Path(tmp) / "claude_titles"
+    claude_mod.PROJECTS = proj
+    a = claude_mod.ClaudeAdapter()
+    uid = [0]
+
+    def user_row(text, ts=None, ts_ms=None):
+        uid[0] += 1
+        row = {"type": "user", "uuid": f"u{uid[0]}", "cwd": CWD, "gitBranch": "main",
+               "message": {"role": "user", "content": text}}
+        if ts is not None:
+            row["timestamp"] = ts
+        if ts_ms is not None:
+            row["timestamp_ms"] = ts_ms
+        return row
+
+    def write_transcript(sid, rows):
+        d = proj / claude_mod.enc(CWD)
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{sid}.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return p
+
+    # custom-title beats ai-title
+    p = write_transcript("sid-a", [
+        {"type": "custom-title", "customTitle": "Custom Title"},
+        {"type": "ai-title", "aiTitle": "AI Title"},
+        user_row("hello world", ts="2026-01-01T00:00:00.000Z"),
+    ])
+    s = a.read(p)
+    assert s.extra["title"] == "Custom Title", f"customTitle should win, got {s.extra.get('title')!r}"
+
+    # ai-title alone is used
+    p = write_transcript("sid-b", [
+        {"type": "ai-title", "aiTitle": "AI Title Only"},
+        user_row("hello world", ts="2026-01-01T00:00:00.000Z"),
+    ])
+    s = a.read(p)
+    assert s.extra["title"] == "AI Title Only", f"aiTitle should be used, got {s.extra.get('title')!r}"
+
+    # neither present: fall back to first non-empty line of first user message,
+    # with a leading well-formed <system-reminder> wrapper stripped
+    wrapped = "<system-reminder>ignore me</system-reminder>\nActual first line\nsecond line"
+    p = write_transcript("sid-c", [user_row(wrapped, ts="2026-01-01T00:00:00.000Z")])
+    s = a.read(p)
+    assert s.extra["title"] == "Actual first line", \
+        f"well-formed wrapper should be stripped from fallback title, got {s.extra.get('title')!r}"
+    assert s.records[0].text == wrapped, \
+        "stripping for the title must never mutate the stored message body"
+
+    # malformed wrapper (unclosed tag): fail closed, strip NOTHING
+    malformed = "<system-reminder>\nunclosed forever\nmore lines"
+    p = write_transcript("sid-d", [user_row(malformed, ts="2026-01-01T00:00:00.000Z")])
+    s = a.read(p)
+    assert s.extra["title"] == "<system-reminder>", \
+        f"unclosed wrapper must fail closed (strip nothing), got {s.extra.get('title')!r}"
+    assert s.records[0].text == malformed, "message body must not be mutated even on the fail-closed path"
+
+    # title > 120 chars gets truncated to <=120 chars, ending in '...'
+    long_line = "X" * 150
+    p = write_transcript("sid-e", [user_row(long_line, ts="2026-01-01T00:00:00.000Z")])
+    s = a.read(p)
+    title = s.extra["title"]
+    assert len(title) <= 120, f"title should be capped at 120 chars, got {len(title)}"
+    assert title.endswith("..."), f"truncated title should end with '...', got {title!r}"
+    assert title[:117] == long_line[:117], "truncated title should preserve the original prefix"
+
+    # no timestamp, but timestamp_ms present: derive ISO-8601 UTC from it
+    ts_ms = 1700000000000
+    p = write_transcript("sid-f", [user_row("hi there", ts=None, ts_ms=ts_ms)])
+    s = a.read(p)
+    rec = s.records[0]
+    expected_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    assert rec.ts.startswith(expected_dt.strftime("%Y-%m-%dT%H:%M:%S")), \
+        f"timestamp_ms not converted to matching ISO-8601 UTC ts: {rec.ts!r}"
+    assert rec.ts.endswith("Z"), f"derived ts should be UTC ('Z'-suffixed), got {rec.ts!r}"
+
+    # neither timestamp nor timestamp_ms: fall back to the transcript file's mtime
+    p = write_transcript("sid-g", [user_row("hi again", ts=None, ts_ms=None)])
+    s = a.read(p)
+    rec = s.records[0]
+    assert rec.ts, "record with no timestamp/timestamp_ms should still get a non-empty fallback ts"
+    datetime.fromisoformat(rec.ts.replace("Z", "+00:00"))  # raises if unparsable
+
+    print("PASS claude-title-and-timestamps: title precedence, stripping, truncation, ts fallbacks all correct")
+
+
+def _codex_rollout(base, y, m, d, sid, cwd, start_ts, mtime_epoch):
+    p = (base / f"{y:04d}" / f"{m:02d}" / f"{d:02d}" /
+         f"rollout-{y:04d}-{m:02d}-{d:02d}T00-00-00-{sid}.jsonl")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    meta = {"timestamp": start_ts, "type": "session_meta",
+            "payload": {"id": sid, "session_id": sid, "cwd": cwd, "timestamp": start_ts}}
+    p.write_text(json.dumps(meta) + "\n")
+    os.utime(p, (mtime_epoch, mtime_epoch))
+    return p
+
+
+def test_codex_locate_newest_by_mtime(tmp):
+    # locate() ranks candidate rollouts by file mtime (last write), not by
+    # session_meta.timestamp (session start), and early-exits at the first cwd
+    # match instead of scanning the whole tree. Pin that deliberate ordering.
+    base = Path(tmp) / "codex_locate"
+    codex_mod.SESSIONS = base
+    target, other = "/proj/target", "/proj/other"
+    now = time.time()
+
+    # fA: matches cwd, OLDER session start, but the NEWEST mtime among matches
+    fA = _codex_rollout(base, 2026, 1, 1, "aaaa1111", target, "2026-01-01T01:00:00Z", now - 100)
+    # fB: matches cwd, LATER session start than fA, but an OLDER mtime than fA
+    fB = _codex_rollout(base, 2026, 1, 2, "bbbb2222", target, "2026-01-03T23:00:00Z", now - 200)
+    # fC: newest mtime overall, but a non-matching cwd -> must be skipped
+    fC = _codex_rollout(base, 2026, 1, 3, "cccc3333", other, "2026-01-02T12:00:00Z", now)
+
+    a = codex_mod.CodexAdapter()
+    got = a.locate(target)
+    assert got == fA, f"expected newest-mtime cwd match {fA}, got {got}"
+
+    meta_a, meta_b = a._meta(fA), a._meta(fB)
+    assert meta_a["timestamp"] < meta_b["timestamp"], \
+        "test setup must pin fA (chosen) as the OLDER session start than fB (not chosen)"
+
+    try:
+        a.locate("/nowhere/at/all")
+        raise AssertionError("locate() should raise SystemExit when no cwd matches")
+    except SystemExit:
+        pass
+
+    print("PASS codex-locate-newest-by-mtime: newest mtime wins over newer session start; not-found raises")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
@@ -219,4 +490,8 @@ if __name__ == "__main__":
         test_title_enrichment(tmp)
         test_opencode_write_invariants(tmp)
         test_opencode_read(tmp)
+        test_cursor_read(tmp)
+        test_opencode_no_duplicate_output(tmp)
+        test_claude_title_and_timestamps(tmp)
+        test_codex_locate_newest_by_mtime(tmp)
     print("\nALL PASS")

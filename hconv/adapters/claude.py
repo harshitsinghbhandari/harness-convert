@@ -11,6 +11,7 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..adapter import Adapter, register
@@ -24,6 +25,15 @@ VERSION = "2.1.153"
 INBOUND_NAMES = {"exec_command": "Bash", "shell": "Bash",
                  "apply_patch": "Edit", "read_file": "Read", "view_image": "Read"}
 
+# Harness-control wrappers that pollute a first-user-message-derived title.
+# See docs/codex-external-agent-migration.md section 4.4 (title.rs:5).
+_CONTROL_TAGS = {
+    "command-message", "command-name", "command-args", "local-command-caveat",
+    "local-command-stderr", "local-command-stdout", "task-notification",
+    "system-reminder", "ide_opened_file", "ide_selection",
+}
+_TAG_RE = re.compile(r"<(/?)([A-Za-z0-9_-]+)>")
+
 
 def enc(cwd: str) -> str:
     """Claude's project-dir encoding: every non-alphanumeric char -> '-'."""
@@ -32,6 +42,67 @@ def enc(cwd: str) -> str:
 
 def _toolu(call_id: str) -> str:
     return "toolu_" + hashlib.sha1(call_id.encode()).hexdigest()[:24]
+
+
+def _iso_utc(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _record_ts(d: dict, fallback_ts: str) -> str:
+    """RFC3339 timestamp, else timestamp_ms, else the transcript's own mtime."""
+    ts = d.get("timestamp")
+    if ts:
+        return ts
+    ms = d.get("timestamp_ms")
+    if isinstance(ms, (int, float)):
+        return _iso_utc(ms / 1000)
+    return fallback_ts
+
+
+def _strip_control_wrappers(text: str) -> str:
+    """Strip leading harness-control blocks (title use only; never mutates the
+    stored message body). Nesting-aware; fails closed (strips nothing) on any
+    mismatched or unclosed tag anywhere inside a wrapper being consumed."""
+    pos = 0
+    while True:
+        rest = text[pos:]
+        lstripped = rest.lstrip()
+        skip = len(rest) - len(lstripped)
+        m = _TAG_RE.match(lstripped)
+        if not m or m.group(1) or m.group(2) not in _CONTROL_TAGS:
+            break
+        scan_start = pos + skip + m.end()
+        stack = [m.group(2)]
+        closed_at = None
+        for tm in _TAG_RE.finditer(text, scan_start):
+            name = tm.group(2)
+            if not tm.group(1):
+                stack.append(name)
+            else:
+                if not stack or stack[-1] != name:
+                    return text
+                stack.pop()
+                if not stack:
+                    closed_at = tm.end()
+                    break
+        if closed_at is None:
+            return text
+        pos = closed_at
+    return text[pos:]
+
+
+def _fallback_title(text: str | None) -> str:
+    if not text:
+        return ""
+    for line in _strip_control_wrappers(text).splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _cap_title(title: str) -> str:
+    return title if len(title) <= 120 else title[:117].rstrip() + "..."
 
 
 class ClaudeAdapter(Adapter):
@@ -51,7 +122,9 @@ class ClaudeAdapter(Adapter):
 
     def read(self, path: Path) -> Session:
         sid = path.stem
-        cwd = git = started = title = ""
+        cwd = git = started = custom_title = ai_title = ""
+        first_user_text = None
+        mtime_ts = _iso_utc(path.stat().st_mtime)
         records = []
         for line in path.read_text().splitlines():
             if not line.strip():
@@ -60,21 +133,29 @@ class ClaudeAdapter(Adapter):
                 d = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if d.get("aiTitle"):
-                title = d["aiTitle"]
+            if d.get("type") == "custom-title":
+                v = (d.get("customTitle") or "").strip()
+                if v:
+                    custom_title = v
+            elif d.get("type") == "ai-title":
+                v = (d.get("aiTitle") or "").strip()
+                if v:
+                    ai_title = v
             if d.get("type") not in ("user", "assistant") or not d.get("uuid"):
                 continue
             if d.get("isSidechain"):
                 continue
             cwd = d.get("cwd", cwd) or cwd
             git = d.get("gitBranch", git) or git
-            started = started or d.get("timestamp", "")
-            ts = d.get("timestamp", "")
+            ts = _record_ts(d, mtime_ts)
+            started = started or ts
             msg = d.get("message", {})
             role = msg.get("role")
             content = msg.get("content")
             if isinstance(content, str):
                 records.append((UserMessage if role == "user" else AssistantMessage)(content, ts))
+                if role == "user" and first_user_text is None:
+                    first_user_text = content
                 continue
             if not isinstance(content, list):
                 continue
@@ -99,10 +180,14 @@ class ClaudeAdapter(Adapter):
                                               ts, bool(b.get("is_error"))))
                 # thinking / redacted_thinking -> dropped
             if text:
-                records.append((UserMessage if role == "user" else AssistantMessage)("\n".join(text), ts))
+                joined = "\n".join(text)
+                records.append((UserMessage if role == "user" else AssistantMessage)(joined, ts))
+                if role == "user" and first_user_text is None:
+                    first_user_text = joined
         s = Session("claude", sid, cwd, records, git, started)
+        title = custom_title or ai_title or _fallback_title(first_user_text)
         if title:
-            s.extra["title"] = title
+            s.extra["title"] = _cap_title(title)
         return s
 
     def dest_path(self, session: Session, dest_cwd: str) -> Path:

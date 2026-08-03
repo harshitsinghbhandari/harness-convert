@@ -57,16 +57,21 @@ class CodexAdapter(Adapter):
             if not hits:
                 raise SystemExit(f"no Codex session {session_id} under {SESSIONS}")
             return hits[0]
-        best = None  # newest rollout whose session_meta.cwd matches
-        for p in SESSIONS.glob("**/rollout-*.jsonl"):
-            m = self._meta(p)
-            if m.get("cwd") == cwd:
-                ts = m.get("timestamp", "")
-                if best is None or ts > best[0]:
-                    best = (ts, p)
-        if best is None:
-            raise SystemExit(f"no Codex sessions found for cwd {cwd}")
-        return best[1]
+        # session_index.jsonl (see _title) carries only id/thread_name/updated_at,
+        # no cwd, so it can't resolve candidates directly. Sort rollouts by mtime
+        # (newest first) and stop at the first session_meta.cwd match instead of
+        # opening every file in the tree.
+        # This ranks by LAST WRITE, not by session_meta.timestamp (session start).
+        # Deliberate: the escape hatch wants the session you were just working in,
+        # so a long session resumed until 06:41 beats one started at 19:56 and
+        # abandoned. Diverges from start-ordering on ~4% of real cwds. Don't
+        # "fix" this back to meta timestamp without re-reading this comment.
+        paths = sorted(SESSIONS.glob("**/rollout-*.jsonl"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in paths:
+            if self._meta(p).get("cwd") == cwd:
+                return p
+        raise SystemExit(f"no Codex sessions found for cwd {cwd}")
 
     def _title(self, sid: str) -> str:
         if not INDEX.exists():
