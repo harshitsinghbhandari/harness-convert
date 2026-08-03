@@ -1,0 +1,55 @@
+:root{
+  --bg:#0b0d0e; --fg:#d8dee4; --dim:#6e7a86; --green:#4ee39a; --red:#f47067;
+  --muted:#9aa5b1;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--fg);
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+.man{max-width:82ch;margin:0 auto;padding:28px 24px 56px}
+a{color:var(--green);text-decoration:none}
+a:hover{text-decoration:underline}
+b{color:#fff;font-weight:600}
+u{text-decoration:underline;text-underline-offset:3px}
+.dim{color:var(--dim)}
+.muted{color:var(--muted)}
+.err{color:var(--red)}
+.ok{color:var(--green)}
+
+.topnav{display:flex;justify-content:flex-end;gap:2ch;font-size:13px;margin-bottom:20px;flex-wrap:wrap}
+.topnav a{color:var(--dim)}
+.topnav a:hover{color:var(--fg)}
+.topnav a[aria-current="page"]{color:var(--fg)}
+
+.manhead,.manfoot{display:flex;justify-content:space-between;color:var(--fg);gap:1ch}
+.manhead{margin-bottom:28px}
+.manfoot{margin-top:48px;flex-wrap:wrap}
+.manhead span:nth-child(2),.manfoot span:nth-child(2){color:var(--dim)}
+
+h2{font-size:15px;font-weight:600;letter-spacing:.5px;margin:34px 0 8px}
+h2 a{color:var(--fg)}
+h2 a:hover{color:var(--green);text-decoration:none}
+h3{font-size:15px;font-weight:600;margin:22px 0 6px;color:#fff}
+.ind{padding-left:5ch}
+.ind p{margin-bottom:14px;max-width:72ch}
+.ind ul{margin:0 0 14px;padding-left:2ch;max-width:72ch}
+.ind li{margin-bottom:6px}
+pre{overflow-x:auto;line-height:1.75;margin:10px 0 14px}
+
+.cmdline{display:flex;align-items:baseline;gap:2ch;flex-wrap:wrap;margin-bottom:6px}
+.copy{font:inherit;font-size:13px;color:var(--dim);background:none;border:none;
+  cursor:pointer;padding:0}
+.copy:hover{color:var(--green)}
+
+.ver{margin-top:28px}
+.ver h3{margin-top:0}
+.ver .meta{color:var(--dim);font-size:13px;margin-bottom:10px}
+.ver ul{list-style:disc}
+
+@media(max-width:640px){
+  body{font-size:13px}
+  .man{padding:20px 14px 40px}
+  .ind{padding-left:2ch}
+  .manhead span:nth-child(2){display:none}
+}

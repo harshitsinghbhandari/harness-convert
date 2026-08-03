@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>hc changelog</title>
+<meta name="description" content="Release history for harness-convert (hc): Grok, Cursor, OpenCode, multi-session list, and earlier Codex/Claude conversion.">
+<meta property="og:title" content="hc changelog">
+<meta property="og:description" content="What's new in harness-convert, newest first.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hc.agentlab.in/changelog/">
+<link rel="canonical" href="https://hc.agentlab.in/changelog/">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='monospace'>&#8635;</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="man">
+
+  <nav class="topnav">
+    <a href="/">man</a>
+    <a href="/changelog/" aria-current="page">changelog</a>
+    <a href="https://github.com/harshitsinghbhandari/harness-convert/releases">releases</a>
+    <a href="https://github.com/harshitsinghbhandari/harness-convert">github</a>
+  </nav>
+
+  <div class="manhead"><span>HC-CHANGELOG(7)</span><span>Miscellaneous</span><span>HC-CHANGELOG(7)</span></div>
+
+  <h2 id="name"><a href="#name">NAME</a></h2>
+  <div class="ind">
+    <p><b>hc-changelog</b> - release history for harness-convert</p>
+  </div>
+
+  <h2 id="description"><a href="#description">DESCRIPTION</a></h2>
+  <div class="ind">
+    <p>Newest first. Full GitHub notes and assets:
+      <a href="https://github.com/harshitsinghbhandari/harness-convert/releases">releases</a>.</p>
+  </div>
+
+  <h2 id="releases"><a href="#releases">RELEASES</a></h2>
+  <div class="ind">
+
+    <section class="ver" id="v0.4.0">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.4.0">0.4.0</a></h3>
+      <p class="meta">2026-08-03</p>
+      <p><b>Grok Build adapter (full R/W).</b> <b>--from grok</b> /
+        <b>--to grok</b> against <b>~/.grok/sessions</b> (or
+        <b>$GROK_HOME</b>). Writes <b>summary.json</b>,
+        <b>chat_history.jsonl</b>, and <b>updates.jsonl</b> so
+        <b>grok --resume</b> loads history. Non-UUID source ids map to a
+        deterministic UUID. Title enrichment across harnesses.</p>
+      <p><b>Multi-session list.</b> <b>hc list --from</b> <u>HARNESS</u>
+        <b>-n</b> <u>N</u> shows the newest N sessions for the cwd (default
+        10): id, UTC time, title. All harnesses including Cursor.</p>
+      <p class="dim">Also: landing/README updates; hermetic tests for Grok
+        write, round-trip, locate, and list.</p>
+    </section>
+
+    <section class="ver" id="v0.3.0">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.3.0">0.3.0</a></h3>
+      <p class="meta">2026-08-03</p>
+      <p><b>Read-only Cursor adapter.</b> <b>--from cursor</b> reads
+        content-addressed protobuf blob sessions under
+        <b>~/.cursor/chats</b> (full tool outputs). <b>--to cursor</b> is
+        refused: no import path to validate against. Subagent sessions
+        (no <b>meta.json</b>) are excluded from locate.</p>
+    </section>
+
+    <section class="ver" id="v0.2.2">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.2.2">0.2.2</a></h3>
+      <p class="meta">2026-07-18</p>
+      <p>Packaging and release-pipeline polish after 0.2.1. Same conversion
+        surface as 0.2.1.</p>
+    </section>
+
+    <section class="ver" id="v0.2.1">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.2.1">0.2.1</a></h3>
+      <p class="meta">2026-07-18</p>
+      <p><b>Codex &gt;= 0.144 resume fix.</b> Emit
+        <b>model_provider</b> (and related identity fields) on
+        <b>session_meta</b> so TUI resume does not die with an empty
+        provider.</p>
+      <p><b>OpenCode ses_ id mapping.</b> Foreign session ids are mapped to
+        deterministic <b>ses_</b>-prefixed ids on write so
+        <b>opencode -s</b> can resume after import.</p>
+    </section>
+
+    <section class="ver" id="v0.2.0">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.2.0">0.2.0</a></h3>
+      <p class="meta">2026-07-18</p>
+      <p><b>OpenCode</b> as a third harness: any direction between Codex,
+        Claude Code, and OpenCode. Converting into OpenCode writes a
+        canonical import file; resume with <b>opencode import</b> then
+        <b>opencode -s</b>.</p>
+      <p>npm package (<b>@theharshitsingh/hc</b>) and Homebrew formula
+        (<b>harshitsinghbhandari/tap/harness-convert</b>). Landing page
+        shipped.</p>
+    </section>
+
+    <section class="ver" id="v0.1.0">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.1.0">0.1.0</a></h3>
+      <p class="meta">2026-06-27</p>
+      <p>First release. Codex &harr; Claude Code session conversion, native
+        resume, rendered scrollback with tool cards, title transfer, and
+        ragged-tail handling. Stdlib-only Python CLI.</p>
+    </section>
+
+  </div>
+
+  <h2 id="see-also"><a href="#see-also">SEE ALSO</a></h2>
+  <div class="ind">
+    <p><a href="/">hc(1)</a> &middot;
+      <a href="https://github.com/harshitsinghbhandari/harness-convert">source</a></p>
+    <p>MIT &middot; built by
+      <a href="https://theharshitsingh.com">Harshit Singh Bhandari</a></p>
+  </div>
+
+  <div class="manfoot"><span>harness-convert 0.4.0</span><span>2026-08-03</span><span>HC-CHANGELOG(7)</span></div>
+
+</div>
+</body>
+</html>

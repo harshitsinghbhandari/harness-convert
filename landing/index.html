@@ -3,67 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>hc: move a coding session between agents</title>
-<meta name="description" content="Your AI coding harness hit a rate limit mid-task. Relocate the session to another harness and resume where you left off. Codex, Claude Code, OpenCode, Grok.">
+<title>hc(1) - move a coding session between agents</title>
+<meta name="description" content="Escape hatch for coding agents. Relocate a session across Claude Code, Codex, OpenCode, Grok Build, or Cursor and resume it natively. Reads the transcript off disk when the harness is dead.">
 <meta property="og:title" content="hc: move a coding session between agents">
-<meta property="og:description" content="Rate-limited 80% through a fix? Relocate the session to a live harness and keep going. Codex, Claude Code, OpenCode, Grok. Native resume.">
+<meta property="og:description" content="Rate-limited 80% through a fix? Relocate the session to a live harness and keep going. Claude, Codex, OpenCode, Grok. Cursor is source-only. Native resume.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://hc.agentlab.in/">
+<link rel="canonical" href="https://hc.agentlab.in/">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='monospace'>&#8635;</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#0b0d0e; --fg:#d8dee4; --dim:#6e7a86; --green:#4ee39a; --red:#f47067;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html{scroll-behavior:smooth}
-  body{background:var(--bg);color:var(--fg);
-    font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
-    font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
-  .man{max-width:82ch;margin:0 auto;padding:28px 24px 56px}
-  a{color:var(--green);text-decoration:none}
-  a:hover{text-decoration:underline}
-  b{color:#fff;font-weight:600}
-  u{text-decoration:underline;text-underline-offset:3px}
-  .dim{color:var(--dim)}
-  .err{color:var(--red)}
-  .ok{color:var(--green)}
-
-  .topnav{display:flex;justify-content:flex-end;gap:2ch;font-size:13px;margin-bottom:20px}
-  .topnav a{color:var(--dim)}
-  .topnav a:hover{color:var(--fg)}
-
-  .manhead,.manfoot{display:flex;justify-content:space-between;color:var(--fg)}
-  .manhead{margin-bottom:28px}
-  .manfoot{margin-top:48px}
-  .manhead span:nth-child(2),.manfoot span:nth-child(2){color:var(--dim)}
-
-  h2{font-size:15px;font-weight:600;letter-spacing:.5px;margin:34px 0 8px}
-  h2 a{color:var(--fg)}
-  h2 a:hover{color:var(--green);text-decoration:none}
-  .ind{padding-left:5ch}
-  .ind p{margin-bottom:14px;max-width:72ch}
-  pre{overflow-x:auto;line-height:1.75;margin:10px 0 14px}
-
-  .cmdline{display:flex;align-items:baseline;gap:2ch;flex-wrap:wrap;margin-bottom:6px}
-  .copy{font:inherit;font-size:13px;color:var(--dim);background:none;border:none;
-    cursor:pointer;padding:0}
-  .copy:hover{color:var(--green)}
-
-  @media(max-width:640px){
-    body{font-size:13px}
-    .man{padding:20px 14px 40px}
-    .ind{padding-left:2ch}
-    .manhead span:nth-child(2){display:none}
-  }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="man">
 
   <nav class="topnav">
     <a href="#installation">install</a>
+    <a href="/changelog/">changelog</a>
     <a href="https://github.com/harshitsinghbhandari/harness-convert">github</a>
   </nav>
 
@@ -71,13 +29,14 @@
 
   <h2 id="name"><a href="#name">NAME</a></h2>
   <div class="ind">
-    <p><b>hc</b> - move a coding session between agents and resume it natively</p>
+    <p><b>hc</b> - relocate a coding-agent session across harnesses and resume it natively</p>
   </div>
 
   <h2 id="synopsis"><a href="#synopsis">SYNOPSIS</a></h2>
   <div class="ind">
-    <pre><b>hc</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>--write</b>] [<b>--dest-cwd</b> <u>DIR</u>]
-<b>hc list</b> --from <u>HARNESS</u></pre>
+    <pre><b>hc</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>--write</b>] [<b>--cwd</b> <u>DIR</u>] [<b>--dest-cwd</b> <u>DIR</u>]
+<b>hc convert</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>--write</b>] ...
+<b>hc list</b> --from <u>HARNESS</u> [<b>-n</b> <u>N</u>] [<b>--cwd</b> <u>DIR</u>]</pre>
   </div>
 
   <h2 id="description"><a href="#description">DESCRIPTION</a></h2>
@@ -89,6 +48,36 @@
       into the target harness's native format, and prints the exact resume
       command. The dead harness never needs to run again, and your quota never
       needs to come back. Two seconds, and you keep going where you left off.</p>
+    <p>By default <b>hc</b> is a dry run: it prints what it would do. Pass
+      <b>--write</b> to create the destination session. Stdlib only; zero
+      runtime dependencies. An escape hatch cannot ask you to resolve a
+      dependency tree while you are on fire.</p>
+  </div>
+
+  <h2 id="options"><a href="#options">OPTIONS</a></h2>
+  <div class="ind">
+    <p><b>--from</b> <u>HARNESS</u><br>
+      Source harness. One of <b>claude</b>, <b>codex</b>, <b>opencode</b>,
+      <b>grok</b>, <b>cursor</b>.</p>
+    <p><b>--to</b> <u>HARNESS</u><br>
+      Destination harness. Writable set: <b>claude</b>, <b>codex</b>,
+      <b>opencode</b>, <b>grok</b>. <b>cursor</b> is source-only and rejected
+      here.</p>
+    <p><u>SESSION</u><br>
+      Optional session id. Default: newest convertible session for the
+      source cwd (last write / last activity, harness-specific).</p>
+    <p><b>--write</b><br>
+      Actually create the destination session. Without it, dry run only.</p>
+    <p><b>--cwd</b> <u>DIR</u><br>
+      Source working directory used to locate sessions. Default: current
+      directory.</p>
+    <p><b>--dest-cwd</b> <u>DIR</u><br>
+      Destination working directory written into the converted session.
+      Default: same as <b>--cwd</b>. Use this to relocate a session across
+      folders inside one harness (lossless metadata rewrite).</p>
+    <p><b>-n</b> <u>N</u>, <b>--n</b> <u>N</u><br>
+      For <b>hc list</b> only: how many newest sessions to show. Default: 10.
+      Output is session id, UTC time, and title when available.</p>
   </div>
 
   <h2 id="examples"><a href="#examples">EXAMPLES</a></h2>
@@ -96,64 +85,115 @@
     <p class="dim">Your harness dies mid-fix:</p>
     <pre><span class="dim">&gt; fixing the failing payments test...</span>
 <span class="err">&#10007; usage limit reached &middot; resets in 1h</span>      <span class="dim">(30 minutes to ship)</span></pre>
-    <p class="dim">See what is recoverable, then move it:</p>
+
+    <p class="dim">See what is recoverable:</p>
+    <pre><span class="ok">$</span> <b>hc list --from claude -n 5</b>
+claude sessions for /proj  (newest first, 5 shown)
+  ce0dc35e-...  2026-08-03 17:19  Fix the failing payments test
+  a1b2c3d4-...  2026-08-03 12:04  Review PR 1201
+  ...</pre>
+
+    <p class="dim">Dry-run the move, then write and resume:</p>
     <pre><span class="ok">$</span> <b>hc --from claude --to codex</b>
-from   : claude  (ce0dc35e...)
+from   : claude  (ce0dc35e-...)
 to     : codex
 records: 243  (78 tool calls)
-title  : "Fix the failing payments test"
+dest   : ~/.codex/sessions/.../rollout-...-ce0dc35e....jsonl
 <span class="dim">(dry run; pass --write to create it)</span>
 
 <span class="ok">$</span> <b>hc --from claude --to codex --write</b>
-<span class="ok">&#10003; wrote rollout &middot; resume with:</span>
+...
+<span class="ok">WROTE. resume with:</span>
+  cd /proj &amp;&amp; codex resume ce0dc35e-...</pre>
 
-<span class="ok">$</span> <b>codex resume ce0dc35e</b>      <span class="dim">full history, keep going</span></pre>
+    <p class="dim">Into Grok Build (session directory under ~/.grok):</p>
+    <pre><span class="ok">$</span> <b>hc --from claude --to grok --write</b>
+...
+<span class="ok">WROTE. resume with:</span>
+  cd /proj &amp;&amp; grok --resume &lt;uuid&gt;</pre>
+
+    <p class="dim">Out of Cursor (read-only source) into Claude:</p>
+    <pre><span class="ok">$</span> <b>hc --from cursor --to claude --write</b></pre>
+
+    <p class="dim">Into OpenCode (import file, not a live DB poke):</p>
+    <pre><span class="ok">$</span> <b>hc --from codex --to opencode --write</b>
+...
+<span class="ok">WROTE. resume with:</span>
+  cd /proj &amp;&amp; opencode import &lt;file&gt; &amp;&amp; opencode -s ses_...</pre>
   </div>
 
   <h2 id="how-it-works"><a href="#how-it-works">HOW IT WORKS</a></h2>
   <div class="ind">
     <p><b>Common interface.</b> Every harness maps to four records: user
-      message, assistant reply, tool call, tool result. The universal floor
-      that guarantees any pair converts and resumes.</p>
+      message, assistant reply, tool call, tool result. That floor guarantees
+      any pair converts and resumes. Private reasoning is dropped
+      (provider-owned / encrypted; unrecoverable).</p>
     <p><b>N&sup2; enrichment.</b> Surplus the floor cannot hold (session
-      titles, modes) rides a sparse (<u>from</u>, <u>to</u>) map layered on
-      top. It never re-encodes the common records, only the extras.</p>
-    <p><b>Dual streams.</b> Writes both the model-context stream and the UI
-      scrollback, including exec and diff tool cards, so history renders in
-      the target harness instead of merely resuming.</p>
+      titles) rides a sparse (<u>from</u>, <u>to</u>) map layered on top.
+      Missing pairs stay common-only. The map never re-encodes the four
+      records, only the extras.</p>
+    <p><b>Dual streams.</b> A session is model context plus UI scrollback plus
+      identity. Writers emit whatever the destination needs so history paints
+      in the TUI (Codex <b>response_item</b> + <b>event_msg</b> tool cards;
+      Grok <b>chat_history</b> + <b>updates</b>; Claude's single row set serves
+      both).</p>
     <p><b>Ragged tails.</b> The source usually died mid-tool-call. Every
-      orphaned call gets a synthetic result, or the resumed agent would reject
-      the history. The normal case, handled.</p>
-  </div>
-
-  <h2 id="installation"><a href="#installation">INSTALLATION</a></h2>
-  <div class="ind">
-    <p class="dim">Stdlib only, zero dependencies. An escape hatch cannot ask
-      you to resolve a dependency tree while you are on fire.</p>
-    <div class="cmdline"><span><span class="ok">$</span> <b>pipx install harness-convert</b></span><button class="copy" data-cmd="pipx install harness-convert">[copy]</button></div>
-    <div class="cmdline"><span><span class="ok">$</span> <b>npm i -g @theharshitsingh/hc</b></span><button class="copy" data-cmd="npm i -g @theharshitsingh/hc">[copy]</button></div>
-    <div class="cmdline"><span><span class="ok">$</span> <b>brew install harshitsinghbhandari/tap/harness-convert</b></span><button class="copy" data-cmd="brew install harshitsinghbhandari/tap/harness-convert">[copy]</button></div>
+      orphaned call gets a synthetic error result, or the resumed API rejects
+      the history. That is the normal case for this tool, not an edge case.</p>
   </div>
 
   <h2 id="supported-harnesses"><a href="#supported-harnesses">SUPPORTED HARNESSES</a></h2>
   <div class="ind">
-    <pre><b>claude</b>    Claude Code   <span class="dim">~/.claude</span>
-<b>codex</b>     Codex         <span class="dim">~/.codex</span>
-<b>opencode</b>  OpenCode      <span class="dim">~/.local/share/opencode</span>
-<b>grok</b>      Grok Build    <span class="dim">~/.grok</span>
-<b>cursor</b>    Cursor        <span class="dim">~/.cursor/chats</span>  <span class="dim">(source only)</span></pre>
+    <pre><b>claude</b>    Claude Code   <span class="dim">~/.claude/projects</span>              R/W
+<b>codex</b>     Codex         <span class="dim">~/.codex/sessions</span>               R/W
+<b>opencode</b>  OpenCode      <span class="dim">~/.local/share/opencode</span>         R/W
+<b>grok</b>      Grok Build    <span class="dim">~/.grok/sessions  ($GROK_HOME)</span>  R/W
+<b>cursor</b>    Cursor        <span class="dim">~/.cursor/chats</span>                 read-only</pre>
     <p>Any direction among the writable ones. Converting <u>into</u> OpenCode
-      writes an import file; resume with <b>opencode import</b> <u>FILE</u> then
-      <b>opencode -s</b> <u>ID</u>. Converting <u>into</u> Grok writes a session
-      directory; resume with <b>grok --resume</b> <u>ID</u> (hc prints the exact
-      commands). Cursor is read-only. Within a harness, sessions also relocate
-      freely across working directories.</p>
+      writes an import file; resume with <b>opencode import</b> <u>FILE</u>
+      then <b>opencode -s</b> <u>ID</u>. Converting <u>into</u> Grok writes a
+      session directory; resume with <b>grok --resume</b> <u>ID</u>. Cursor has
+      no import path, so <b>--to cursor</b> is refused. Within a harness,
+      sessions also relocate freely across working directories.</p>
+  </div>
+
+  <h2 id="installation"><a href="#installation">INSTALLATION</a></h2>
+  <div class="ind">
+    <p class="dim">Pick one. Python 3.10+; the npm package shells out to
+      <b>python3</b> on PATH.</p>
+    <div class="cmdline"><span><span class="ok">$</span> <b>pipx install harness-convert</b></span><button type="button" class="copy" data-cmd="pipx install harness-convert">[copy]</button></div>
+    <div class="cmdline"><span><span class="ok">$</span> <b>pipx upgrade harness-convert</b></span><button type="button" class="copy" data-cmd="pipx upgrade harness-convert">[copy]</button></div>
+    <div class="cmdline"><span><span class="ok">$</span> <b>npm i -g @theharshitsingh/hc</b></span><button type="button" class="copy" data-cmd="npm i -g @theharshitsingh/hc">[copy]</button></div>
+    <div class="cmdline"><span><span class="ok">$</span> <b>brew install harshitsinghbhandari/tap/harness-convert</b></span><button type="button" class="copy" data-cmd="brew install harshitsinghbhandari/tap/harness-convert">[copy]</button></div>
+    <p class="dim" style="margin-top:14px">From a checkout:
+      <b>pipx install .</b> or <b>python3 hc.py ...</b></p>
+  </div>
+
+  <h2 id="environment"><a href="#environment">ENVIRONMENT</a></h2>
+  <div class="ind">
+    <p><b>GROK_HOME</b><br>
+      Override Grok's base directory (default <b>~/.grok</b>). Sessions are
+      under <b>$GROK_HOME/sessions</b>.</p>
+    <p><b>XDG_DATA_HOME</b><br>
+      Affects OpenCode's store path when set
+      (<b>$XDG_DATA_HOME/opencode</b>).</p>
+  </div>
+
+  <h2 id="exit-status"><a href="#exit-status">EXIT STATUS</a></h2>
+  <div class="ind">
+    <p><b>0</b>  Success (including dry run and empty list with a message).<br>
+      <b>1</b>  No matching session, unknown harness, or write refused
+      (read-only destination).<br>
+      <b>2</b>  Usage / argparse error.</p>
   </div>
 
   <h2 id="see-also"><a href="#see-also">SEE ALSO</a></h2>
   <div class="ind">
-    <p><a href="https://github.com/harshitsinghbhandari/harness-convert">github.com/harshitsinghbhandari/harness-convert</a></p>
-    <p>MIT &middot; built by <a href="https://theharshitsingh.com">Harshit Singh Bhandari</a></p>
+    <p><a href="/changelog/">hc.agentlab.in/changelog</a> &middot;
+      <a href="https://github.com/harshitsinghbhandari/harness-convert">github.com/harshitsinghbhandari/harness-convert</a></p>
+    <p>MIT &middot; built by
+      <a href="https://theharshitsingh.com">Harshit Singh Bhandari</a> &middot;
+      <a href="https://agentlab.in">agentlab.in</a></p>
   </div>
 
   <div class="manfoot"><span>harness-convert 0.4.0</span><span>2026-08-03</span><span>HC(1)</span></div>
