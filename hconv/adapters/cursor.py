@@ -32,7 +32,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..adapter import Adapter, register
+from ..adapter import Adapter, SessionRef, register
 from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
                       UserMessage)
 
@@ -100,9 +100,10 @@ class CursorAdapter(Adapter):
     writable = False
 
     # locate() returns the SESSION DIRECTORY (store.db + meta.json live in it).
-    def locate(self, cwd: str, session_id: str | None = None) -> Path:
+    def _candidates(self, cwd: str) -> list[tuple[float, Path, dict]]:
+        """(mtime_epoch, session_dir, meta) for real user sessions on this cwd."""
         if not CHATS.is_dir():
-            raise SystemExit(f"no Cursor chats directory at {CHATS}")
+            return []
         fast = CHATS / hashlib.md5(cwd.encode()).hexdigest()
         # No meta.json => subagent transcript (or a pre-schemaVersion-1 session);
         # globbing meta.json is what keeps both out of the picker.
@@ -114,16 +115,37 @@ class CursorAdapter(Adapter):
             except (OSError, ValueError):
                 continue
             if m.get("cwd") == cwd and m.get("hasConversation"):
-                found.append((m.get("updatedAtMs") or m.get("createdAtMs") or 0,
-                              mp.parent))
+                ms = m.get("updatedAtMs") or m.get("createdAtMs") or 0
+                found.append((ms / 1000 if ms else 0.0, mp.parent, m))
+        return found
+
+    def list_sessions(self, cwd: str, limit: int = 10) -> list[SessionRef]:
+        if limit < 1:
+            return []
+        found = sorted(self._candidates(cwd), key=lambda t: t[0], reverse=True)
+        out = []
+        for mtime, d, m in found[:limit]:
+            sid = m.get("agentId") or d.name
+            title = m.get("title") or ""
+            if title == "New Agent":
+                title = ""
+            out.append(SessionRef(path=d, session_id=sid, mtime=mtime, title=title))
+        return out
+
+    def locate(self, cwd: str, session_id: str | None = None) -> Path:
+        if not CHATS.is_dir():
+            raise SystemExit(f"no Cursor chats directory at {CHATS}")
+        fast = CHATS / hashlib.md5(cwd.encode()).hexdigest()
+        found = self._candidates(cwd)
         if session_id:
             found = [f for f in found if session_id in f[1].name]
             if not found:
                 raise SystemExit(f"no Cursor session {session_id} for cwd {cwd} "
                                  f"(looked in {CHATS})")
+            return max(found, key=lambda t: t[0])[1]
         if not found:
             raise SystemExit(f"no Cursor sessions found for cwd {cwd} (looked in {fast})")
-        return max(found)[1]
+        return max(found, key=lambda t: t[0])[1]
 
     def read(self, path: Path) -> Session:
         d = Path(path)

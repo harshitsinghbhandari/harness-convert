@@ -22,8 +22,10 @@ from hconv.adapters import claude as claude_mod
 from hconv.adapters import codex as codex_mod
 from hconv.adapters import opencode as opencode_mod
 from hconv.adapters import cursor as cursor_mod
+from hconv.adapters import grok as grok_mod
 import hashlib
 import sqlite3
+import uuid
 
 CWD = "/Users/x/proj"
 
@@ -141,6 +143,15 @@ def test_title_enrichment(tmp):
     s3 = sample(); s3.extra["title"] = "should not appear"
     enrich("codex", "codex", s3)  # unregistered pair
     assert "out" not in s3.extra, "surplus leaked for an unregistered pair"
+
+    # claude -> grok: title lands as generated_title on summary.json
+    grok_mod.SESSIONS = Path(tmp) / "grok_t"
+    s4 = sample(); s4.extra["title"] = "Fix the failing test"
+    enrich("claude", "grok", s4)
+    dest = grok_mod.GrokAdapter().write(s4, CWD)
+    summary = json.loads((dest / "summary.json").read_text())
+    assert summary["generated_title"] == "Fix the failing test", summary
+    assert summary["session_summary"] == "Fix the failing test", summary
     print("PASS title-enrichment: carried both ways, absent for unregistered pair")
 
 
@@ -480,6 +491,208 @@ def test_codex_locate_newest_by_mtime(tmp):
     print("PASS codex-locate-newest-by-mtime: newest mtime wins over newer session start; not-found raises")
 
 
+def test_grok_write_invariants(tmp):
+    grok_mod.SESSIONS = Path(tmp) / "grok_write"
+    s = sample()
+    s.records = synthesize_missing_results(s.records)
+    dest = grok_mod.GrokAdapter().write(s, CWD)
+    assert dest.is_dir(), "grok dest is a session directory"
+    for name in ("summary.json", "chat_history.jsonl", "updates.jsonl"):
+        assert (dest / name).exists(), f"missing {name}"
+
+    summary = json.loads((dest / "summary.json").read_text())
+    sid = summary["info"]["id"]
+    assert summary["info"]["cwd"] == CWD
+    assert uuid.UUID(sid), "session id must be a UUID"
+    assert s.extra.get("dest_session_id") == sid
+    assert summary["chat_format_version"] == 1
+    assert summary["current_model_id"]
+    assert summary["num_chat_messages"] >= 1
+
+    # Non-UUID source id maps deterministically.
+    s2 = sample()
+    s2.session_id = "not-a-uuid"
+    s2.records = synthesize_missing_results(s2.records)
+    a = grok_mod.GrokAdapter()
+    d1 = a.write(s2, CWD)
+    d2 = a.write(s2, CWD)
+    assert d1 == d2 and d1.name == s2.extra["dest_session_id"]
+    assert uuid.UUID(d1.name)
+
+    rows = [json.loads(l) for l in (dest / "chat_history.jsonl").read_text().splitlines()]
+    kinds = [r["type"] for r in rows]
+    assert "user" in kinds and "assistant" in kinds and "tool_result" in kinds
+    calls, results = set(), set()
+    for r in rows:
+        if r["type"] == "assistant":
+            for tc in r.get("tool_calls") or []:
+                calls.add(tc["id"])
+                assert isinstance(tc["arguments"], str), "arguments must be a JSON string"
+        if r["type"] == "tool_result":
+            results.add(r["tool_call_id"])
+    assert calls and calls <= results, f"unpaired tool calls: {calls - results}"
+
+    updates = [json.loads(l) for l in (dest / "updates.jsonl").read_text().splitlines()]
+    update_kinds = {u["params"]["update"]["sessionUpdate"] for u in updates}
+    assert "user_message_chunk" in update_kinds
+    assert "agent_message_chunk" in update_kinds
+    assert "tool_call" in update_kinds
+    assert "tool_call_update" in update_kinds
+    assert all(u["params"]["sessionId"] == sid for u in updates)
+    print(f"PASS grok-write: dir layout, UUID sid, {len(calls)} paired tools, "
+          f"{len(updates)} update events")
+
+
+def test_grok_roundtrip(tmp):
+    grok_mod.SESSIONS = Path(tmp) / "grok_rt"
+    s = sample()
+    s.extra["title"] = "Fix the failing test"
+    s.records = synthesize_missing_results(s.records)
+    a = grok_mod.GrokAdapter()
+    back = a.read(a.write(s, CWD))
+    texts_in = [r.text for r in s.records if isinstance(r, (UserMessage, AssistantMessage))]
+    texts_out = [r.text for r in back.records if isinstance(r, (UserMessage, AssistantMessage))]
+    assert texts_in == texts_out, f"text drift\n in={texts_in}\nout={texts_out}"
+    assert back.extra.get("title") == "Fix the failing test"
+    assert back.cwd == CWD
+    # tool names remapped outbound to the Claude-ish middle
+    names = [r.name for r in back.records if isinstance(r, ToolCall)]
+    assert "Bash" in names or "Edit" in names, names
+    print(f"PASS grok-roundtrip: {len(texts_in)} messages, title preserved")
+
+
+def test_grok_read_and_locate(tmp):
+    base = Path(tmp) / "grok_loc"
+    grok_mod.SESSIONS = base
+    a = grok_mod.GrokAdapter()
+    # Build two sessions under the same cwd via write, then tweak mtimes/titles.
+    s_old = sample()
+    s_old.session_id = "11111111-1111-1111-1111-111111111111"
+    s_old.extra["title"] = "older"
+    s_old.records = synthesize_missing_results(s_old.records)
+    d_old = a.write(s_old, CWD)
+
+    s_new = sample()
+    s_new.session_id = "22222222-2222-2222-2222-222222222222"
+    s_new.extra["title"] = "newer"
+    s_new.records = [
+        UserMessage("latest work", "2026-06-28T01:00:00Z"),
+        AssistantMessage("ok", "2026-06-28T01:00:01Z"),
+    ]
+    s_new.started_at = "2026-06-28T01:00:00Z"
+    d_new = a.write(s_new, CWD)
+
+    # Force summary updated_at so locate prefers d_new.
+    for d, ts in ((d_old, "2026-06-27T01:00:00Z"), (d_new, "2026-06-28T02:00:00Z")):
+        summary = json.loads((d / "summary.json").read_text())
+        summary["updated_at"] = ts
+        summary["last_active_at"] = ts
+        (d / "summary.json").write_text(json.dumps(summary))
+
+    got = a.locate(CWD)
+    assert got == d_new, f"locate should pick newest updated_at, got {got}"
+    got_id = a.locate(CWD, "22222222-2222-2222-2222-222222222222")
+    assert got_id == d_new
+
+    # Synthetic chat_history with scaffolding + user_query + reasoning drop.
+    sid = "33333333-3333-3333-3333-333333333333"
+    d = base / grok_mod.enc(CWD) / sid
+    d.mkdir(parents=True)
+    (d / "summary.json").write_text(json.dumps({
+        "info": {"id": sid, "cwd": CWD},
+        "generated_title": "Hello There",
+        "created_at": "2026-06-27T00:00:00Z",
+        "updated_at": "2026-06-27T00:00:00Z",
+        "num_messages": 0, "num_chat_messages": 0,
+        "current_model_id": "grok-4.5", "chat_format_version": 1,
+    }))
+    chat = [
+        {"type": "system", "content": "You are Grok"},
+        {"type": "user", "content": [{"type": "text", "text": "<user_info>\nOS\n</user_info>"}]},
+        {"type": "user", "content": [{"type": "text",
+                                      "text": "<user_query>\nfix the failing test\n</user_query>"}],
+         "prompt_index": 0},
+        {"type": "reasoning", "id": "rs_x", "summary": [{"type": "summary_text", "text": "secret"}],
+         "encrypted_content": "zzz"},
+        {"type": "assistant", "content": "looking now",
+         "tool_calls": [{"id": "call-1", "name": "run_terminal_command",
+                         "arguments": "{\"command\": \"pytest\"}"}]},
+        {"type": "tool_result", "tool_call_id": "call-1", "content": "1 failed"},
+        {"type": "assistant", "content": "",
+         "tool_calls": [{"id": "call-2", "name": "search_replace",
+                         "arguments": "{\"file\": \"x.py\"}"}]},
+        {"type": "tool_result", "tool_call_id": "call-2",
+         "content": "Error: apply failed"},
+    ]
+    (d / "chat_history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in chat))
+    s = a.read(d)
+    assert s.extra.get("title") == "Hello There"
+    kinds = [type(r).__name__ for r in s.records]
+    assert kinds == ["UserMessage", "AssistantMessage", "ToolCall", "ToolResult",
+                     "ToolCall", "ToolResult"], kinds
+    assert s.records[0].text == "fix the failing test"
+    assert s.records[2].name == "Bash" and s.records[2].input.get("command") == "pytest"
+    assert s.records[4].name == "Edit"
+    assert s.records[5].is_error
+    print("PASS grok-read-and-locate: newest wins, scaffolding/reasoning dropped, tools mapped")
+
+
+def test_list_sessions(tmp):
+    # Claude: multiple jsonl files, newest-first, limit respected, titles peeked.
+    proj = Path(tmp) / "claude_list"
+    claude_mod.PROJECTS = proj
+    d = proj / claude_mod.enc(CWD)
+    d.mkdir(parents=True)
+    now = time.time()
+    for i, (sid, title, age) in enumerate([
+        ("sid-old", "Older title", 300),
+        ("sid-mid", "Mid title", 200),
+        ("sid-new", "Newest title", 100),
+    ]):
+        p = d / f"{sid}.jsonl"
+        rows = [{"type": "custom-title", "customTitle": title},
+                {"type": "user", "uuid": f"u{i}", "cwd": CWD,
+                 "message": {"role": "user", "content": "hi"},
+                 "timestamp": "2026-01-01T00:00:00.000Z"}]
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        os.utime(p, (now - age, now - age))
+
+    a = claude_mod.ClaudeAdapter()
+    refs = a.list_sessions(CWD, limit=2)
+    assert len(refs) == 2, refs
+    assert [r.session_id for r in refs] == ["sid-new", "sid-mid"]
+    assert refs[0].title == "Newest title"
+    assert a.list_sessions(CWD, limit=0) == []
+    assert a.list_sessions("/no/such/cwd", limit=5) == []
+    # locate still returns the newest
+    assert a.locate(CWD).stem == "sid-new"
+
+    # Grok: list_sessions shares the same newest-first order as locate.
+    grok_mod.SESSIONS = Path(tmp) / "grok_list"
+    ga = grok_mod.GrokAdapter()
+    for sid, title, ts in [
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "A", "2026-06-27T01:00:00Z"),
+        ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "B", "2026-06-28T01:00:00Z"),
+        ("cccccccc-cccc-cccc-cccc-cccccccccccc", "C", "2026-06-29T01:00:00Z"),
+    ]:
+        s = sample()
+        s.session_id = sid
+        s.extra["title"] = title
+        s.started_at = ts
+        dest = ga.write(s, CWD)
+        summary = json.loads((dest / "summary.json").read_text())
+        summary["updated_at"] = ts
+        summary["last_active_at"] = ts
+        (dest / "summary.json").write_text(json.dumps(summary))
+    grefs = ga.list_sessions(CWD, limit=2)
+    assert [r.session_id for r in grefs] == [
+        "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    ]
+    assert grefs[0].title == "C"
+    print("PASS list-sessions: claude+grok newest-first, limit, titles")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
@@ -494,4 +707,8 @@ if __name__ == "__main__":
         test_opencode_no_duplicate_output(tmp)
         test_claude_title_and_timestamps(tmp)
         test_codex_locate_newest_by_mtime(tmp)
+        test_grok_write_invariants(tmp)
+        test_grok_roundtrip(tmp)
+        test_grok_read_and_locate(tmp)
+        test_list_sessions(tmp)
     print("\nALL PASS")

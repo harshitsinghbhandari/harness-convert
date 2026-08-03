@@ -11,7 +11,8 @@ intact), rewrites it into the target harness's format, and you keep going there.
 hc --from claude --to codex                 # move the latest Claude session here -> Codex
 hc --from codex  --to claude <session-id>   # a specific session
 hc --from claude --to codex --dest-cwd DIR  # land it in a different folder
-hc list --from codex                        # what's the latest convertible session here
+hc list --from codex                        # newest convertible sessions for this cwd
+hc list --from claude -n 5                  # newest 5 (id / time / title)
 ```
 
 By default it's a dry run; pass `--write` to create the file, then it prints the
@@ -35,9 +36,12 @@ A session is **(a)** a model-context stream, **(b)** a UI-render stream, and
   cards); Claude's single row set serves both. OpenCode is SQLite, not JSONL: it
   reads the `session`/`message`/`part` tables read-only, and writes the canonical
   `{info, messages}` file that `opencode import` validates and ingests (safer than
-  poking a live WAL DB), so `opencode -s <id>` resumes it. Cursor is a
-  content-addressed protobuf blob tree inside SQLite; the adapter walks it from
-  the current root, and is read-only (`writable = False`, enforced at the CLI).
+  poking a live WAL DB), so `opencode -s <id>` resumes it. Grok Build stores a
+  session directory (`summary.json` + `chat_history.jsonl` + `updates.jsonl`
+  under `~/.grok/sessions/`); write emits all three so `grok --resume <id>`
+  loads history. Cursor is a content-addressed protobuf blob tree inside SQLite;
+  the adapter walks it from the current root, and is read-only
+  (`writable = False`, enforced at the CLI).
 - **Ragged-tail close** (`synthesize_missing_results`): the source usually died
   mid-tool-call, so every orphan `ToolCall` gets a synthetic result, else the
   resumed API call rejects the history.
@@ -55,17 +59,19 @@ Stdlib only, no dependencies. From a checkout, `pipx install .` or plain
 
 ## Supported
 
-Codex (`~/.codex`), Claude Code (`~/.claude`), and OpenCode
-(`~/.local/share/opencode`): any direction between them. Converting *into*
-OpenCode writes an import file; resume with `opencode import <file> && opencode -s
-<id>` (the command `hc` prints). Within a harness, sessions are also freely
-relocatable across working directories (pure metadata rewrite, lossless).
+Codex (`~/.codex`), Claude Code (`~/.claude`), OpenCode
+(`~/.local/share/opencode`), and Grok Build (`~/.grok`, or `$GROK_HOME`): any
+direction between the writable ones. Converting *into* OpenCode writes an import
+file; resume with `opencode import <file> && opencode -s <id>` (the command `hc`
+prints). Converting *into* Grok writes a session directory; resume with
+`grok --resume <id>`. Within a harness, sessions are also freely relocatable
+across working directories (pure metadata rewrite, lossless).
 
 Cursor (`~/.cursor/chats`) is a **source only**: `--from cursor` works, `--to
 cursor` is rejected. `cursor-agent` has no import command, so writing a session
 would mean authoring its undocumented protobuf blob tree with nothing to
 validate the result against. Reading is full fidelity, tool outputs included.
-See `docs/cursor-format.md`.
+See `docs/cursor-format.md`. Grok on-disk shapes: `docs/grok-format.md`.
 
 ## Test
 

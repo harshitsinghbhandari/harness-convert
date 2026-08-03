@@ -79,3 +79,34 @@ def _opencode_to_claude(s: Session) -> None:
 def _opencode_to_codex(s: Session) -> None:
     if s.extra.get("title"):
         s.extra.setdefault("out", {})["thread_name"] = s.extra["title"]
+
+
+# Grok carries title as generated_title / session_summary on summary.json.
+# Into grok the writer reads out["grok_title"]; out of grok we reuse the keys
+# the other writers already consume.
+
+@register("claude", "grok")
+@register("codex", "grok")
+@register("opencode", "grok")
+@register("cursor", "grok")
+def _to_grok(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["grok_title"] = s.extra["title"]
+
+
+@register("grok", "claude")
+def _grok_to_claude(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["ai_title"] = s.extra["title"]
+
+
+@register("grok", "codex")
+def _grok_to_codex(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["thread_name"] = s.extra["title"]
+
+
+@register("grok", "opencode")
+def _grok_to_opencode(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["opencode_title"] = s.extra["title"]

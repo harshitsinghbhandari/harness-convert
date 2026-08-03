@@ -8,15 +8,17 @@ harness does NOT need to be running or your quota intact.
     hc --from claude --to codex            # move latest Claude session here -> Codex
     hc --from codex  --to claude <id>      # a specific session
     hc --from claude --to codex --cwd DIR  # source/dest folder (default: pwd)
-    hc list --from codex                   # what's convertible for this cwd
+    hc list --from codex                   # newest convertible sessions here
+    hc list --from claude -n 5             # newest 5 (id / time / title)
 
-cursor is read-only: it can be a --from, never a --to.
+cursor is read-only: it can be a --from, never a --to. grok is full R/W.
 
 By default prints what it WOULD do; pass --write to actually create the file.
 """
 import argparse
 import os
 import sys
+from datetime import datetime, timezone
 
 from hconv import convert, get, known, writable
 
@@ -36,19 +38,37 @@ def cmd_convert(a):
         cwd = a.dest_cwd or a.cwd
         resume = {"codex": f"codex resume {sid}",
                   "claude": f"claude --resume {sid}",
-                  "opencode": f"opencode import {dest} && opencode -s {sid}"}[a.to]
+                  "opencode": f"opencode import {dest} && opencode -s {sid}",
+                  "grok": f"grok --resume {sid}"}[a.to]
         print(f"\nWROTE. resume with:\n  cd {cwd} && {resume}")
     else:
         print("\n(dry run; pass --write to create it)")
 
 
+def _fmt_mtime(epoch: float) -> str:
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return "?"
+
+
 def cmd_list(a):
     adapter = get(a.from_harness)
-    try:
-        p = adapter.locate(a.cwd)
-        print(f"latest {a.from_harness} session for {a.cwd}:\n  {p}")
-    except SystemExit as e:
-        print(e)
+    refs = adapter.list_sessions(a.cwd, limit=a.n)
+    if not refs:
+        print(f"no {a.from_harness} sessions found for {a.cwd}")
+        return
+    print(f"{a.from_harness} sessions for {a.cwd}  (newest first, {len(refs)} shown)")
+    id_w = max(len(r.session_id) for r in refs)
+    id_w = max(id_w, 2)
+    for r in refs:
+        title = r.title.replace("\n", " ").strip()
+        if len(title) > 60:
+            title = title[:57].rstrip() + "..."
+        line = f"  {r.session_id:<{id_w}}  {_fmt_mtime(r.mtime)}"
+        if title:
+            line += f"  {title}"
+        print(line)
 
 
 def main():
@@ -72,8 +92,10 @@ def main():
     c.add_argument("--write", action="store_true", help="actually write the file")
     c.set_defaults(func=cmd_convert)
 
-    l = sub.add_parser("list", help="show the latest convertible session for a cwd")
+    l = sub.add_parser("list", help="list recent convertible sessions for a cwd")
     add_common(l)
+    l.add_argument("-n", "--n", type=int, default=10, metavar="N",
+                   help="how many newest sessions to show (default: 10)")
     l.set_defaults(func=cmd_list)
 
     # bare `hc --from X --to Y` == `hc convert ...`

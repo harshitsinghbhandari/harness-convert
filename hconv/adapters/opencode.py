@@ -26,7 +26,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..adapter import Adapter, register
+from ..adapter import Adapter, SessionRef, register
 from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
                       UserMessage)
 
@@ -91,6 +91,28 @@ class OpenCodeAdapter(Adapter):
     def _open(self) -> sqlite3.Connection:
         return sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
 
+    def list_sessions(self, cwd: str, limit: int = 10) -> list[SessionRef]:
+        if limit < 1 or not DB.exists():
+            return []
+        con = self._open()
+        try:
+            rows = con.execute(
+                "SELECT id, title, time_created FROM session WHERE directory = ? "
+                "ORDER BY time_created DESC LIMIT ?",
+                (cwd, limit)).fetchall()
+        finally:
+            con.close()
+        out = []
+        for sid, title, created_ms in rows:
+            mtime = (created_ms or 0) / 1000 if created_ms else 0.0
+            t = (title or "").strip()
+            if t.startswith("New session"):
+                t = ""
+            out.append(SessionRef(
+                path=Path(f"{DB}#{sid}"), session_id=sid, mtime=mtime, title=t,
+            ))
+        return out
+
     def locate(self, cwd: str, session_id: str | None = None) -> Path:
         if not DB.exists():
             raise SystemExit(f"no OpenCode database at {DB}")
@@ -104,14 +126,12 @@ class OpenCodeAdapter(Adapter):
                 if not row:
                     raise SystemExit(f"no OpenCode session {session_id} in {DB}")
                 return Path(f"{DB}#{row[0]}")
-            row = con.execute(
-                "SELECT id FROM session WHERE directory = ? "
-                "ORDER BY time_created DESC LIMIT 1", (cwd,)).fetchone()
-            if not row:
-                raise SystemExit(f"no OpenCode sessions found for cwd {cwd}")
-            return Path(f"{DB}#{row[0]}")
         finally:
             con.close()
+        refs = self.list_sessions(cwd, limit=1)
+        if not refs:
+            raise SystemExit(f"no OpenCode sessions found for cwd {cwd}")
+        return refs[0].path
 
     def read(self, path: Path) -> Session:
         _, _, sid = str(path).rpartition("#")

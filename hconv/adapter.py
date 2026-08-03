@@ -14,9 +14,23 @@ works. Enrichment only adds surplus and is allowed to be missing.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 
 from .common import Session, synthesize_missing_results
+
+
+@dataclass(frozen=True)
+class SessionRef:
+    """A convertible session as the list/locate pickers see it.
+
+    Sorted newest-first by `mtime` (epoch seconds of last activity / last write,
+    harness-specific: see each adapter). `title` is best-effort and may be empty.
+    """
+    path: Path
+    session_id: str
+    mtime: float
+    title: str = ""
 
 
 class Adapter(ABC):
@@ -35,6 +49,20 @@ class Adapter(ABC):
         """Resolve a transcript file. With session_id: that session. Without:
         the most recent session for `cwd` in this harness's store (the fast-path
         default that makes `hc --from X --to Y` need no id)."""
+
+    def list_sessions(self, cwd: str, limit: int = 10) -> list[SessionRef]:
+        """Newest-first convertible sessions for `cwd`, up to `limit`.
+
+        Default falls back to a single locate() hit so older adapters keep
+        working; harnesses that can cheaply enumerate override this.
+        """
+        if limit < 1:
+            return []
+        try:
+            p = self.locate(cwd)
+        except SystemExit:
+            return []
+        return [SessionRef(path=p, session_id=p.stem, mtime=p.stat().st_mtime)]
 
     @abstractmethod
     def read(self, path: Path) -> Session:

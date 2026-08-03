@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>hc: move a coding session between agents</title>
-<meta name="description" content="Your AI coding harness hit a rate limit mid-task. Relocate the session to another harness and resume where you left off. Codex, Claude Code, OpenCode.">
+<meta name="description" content="Your AI coding harness hit a rate limit mid-task. Relocate the session to another harness and resume where you left off. Codex, Claude Code, OpenCode, Grok.">
 <meta property="og:title" content="hc: move a coding session between agents">
-<meta property="og:description" content="Rate-limited 80% through a fix? Relocate the session to a live harness and keep going. Codex, Claude Code, OpenCode. Native resume.">
+<meta property="og:description" content="Rate-limited 80% through a fix? Relocate the session to a live harness and keep going. Codex, Claude Code, OpenCode, Grok. Native resume.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='monospace'>&#8635;</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -139,11 +139,15 @@ title  : "Fix the failing payments test"
   <div class="ind">
     <pre><b>claude</b>    Claude Code   <span class="dim">~/.claude</span>
 <b>codex</b>     Codex         <span class="dim">~/.codex</span>
-<b>opencode</b>  OpenCode      <span class="dim">~/.local/share/opencode</span></pre>
-    <p>Any direction between them. Converting <u>into</u> OpenCode writes an
-      import file; resume with <b>opencode import</b> <u>FILE</u> then
-      <b>opencode -s</b> <u>ID</u> (hc prints the exact commands). Within a
-      harness, sessions also relocate freely across working directories.</p>
+<b>opencode</b>  OpenCode      <span class="dim">~/.local/share/opencode</span>
+<b>grok</b>      Grok Build    <span class="dim">~/.grok</span>
+<b>cursor</b>    Cursor        <span class="dim">~/.cursor/chats</span>  <span class="dim">(source only)</span></pre>
+    <p>Any direction among the writable ones. Converting <u>into</u> OpenCode
+      writes an import file; resume with <b>opencode import</b> <u>FILE</u> then
+      <b>opencode -s</b> <u>ID</u>. Converting <u>into</u> Grok writes a session
+      directory; resume with <b>grok --resume</b> <u>ID</u> (hc prints the exact
+      commands). Cursor is read-only. Within a harness, sessions also relocate
+      freely across working directories.</p>
   </div>
 
   <h2 id="see-also"><a href="#see-also">SEE ALSO</a></h2>
@@ -152,7 +156,7 @@ title  : "Fix the failing payments test"
     <p>MIT &middot; built by <a href="https://theharshitsingh.com">Harshit Singh Bhandari</a></p>
   </div>
 
-  <div class="manfoot"><span>harness-convert 0.2.0</span><span>2026-07-19</span><span>HC(1)</span></div>
+  <div class="manfoot"><span>harness-convert 0.4.0</span><span>2026-08-03</span><span>HC(1)</span></div>
 
 </div>
 <script>

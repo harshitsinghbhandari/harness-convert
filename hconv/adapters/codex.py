@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-from ..adapter import Adapter, register
+from ..adapter import Adapter, SessionRef, register
 from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
                       UserMessage)
 
@@ -51,27 +51,43 @@ class CodexAdapter(Adapter):
         except (json.JSONDecodeError, KeyError):
             return {}
 
+    def list_sessions(self, cwd: str, limit: int = 10) -> list[SessionRef]:
+        # session_index.jsonl (see _title) carries only id/thread_name/updated_at,
+        # no cwd, so it can't resolve candidates directly. Sort rollouts by mtime
+        # (newest first) and collect cwd matches.
+        # This ranks by LAST WRITE, not by session_meta.timestamp (session start).
+        # Deliberate: the escape hatch wants the session you were just working in,
+        # so a long session resumed until 06:41 beats one started at 19:56 and
+        # abandoned. Diverges from start-ordering on ~4% of real cwds. Don't
+        # "fix" this back to meta timestamp without re-reading this comment.
+        if limit < 1 or not SESSIONS.is_dir():
+            return []
+        paths = sorted(SESSIONS.glob("**/rollout-*.jsonl"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        out: list[SessionRef] = []
+        for p in paths:
+            meta = self._meta(p)
+            if meta.get("cwd") != cwd:
+                continue
+            sid = meta.get("id") or meta.get("session_id") or p.stem
+            out.append(SessionRef(
+                path=p, session_id=sid, mtime=p.stat().st_mtime,
+                title=self._title(sid),
+            ))
+            if len(out) >= limit:
+                break
+        return out
+
     def locate(self, cwd: str, session_id: str | None = None) -> Path:
         if session_id:
             hits = list(SESSIONS.glob(f"**/rollout-*{session_id}*.jsonl"))
             if not hits:
                 raise SystemExit(f"no Codex session {session_id} under {SESSIONS}")
             return hits[0]
-        # session_index.jsonl (see _title) carries only id/thread_name/updated_at,
-        # no cwd, so it can't resolve candidates directly. Sort rollouts by mtime
-        # (newest first) and stop at the first session_meta.cwd match instead of
-        # opening every file in the tree.
-        # This ranks by LAST WRITE, not by session_meta.timestamp (session start).
-        # Deliberate: the escape hatch wants the session you were just working in,
-        # so a long session resumed until 06:41 beats one started at 19:56 and
-        # abandoned. Diverges from start-ordering on ~4% of real cwds. Don't
-        # "fix" this back to meta timestamp without re-reading this comment.
-        paths = sorted(SESSIONS.glob("**/rollout-*.jsonl"),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
-        for p in paths:
-            if self._meta(p).get("cwd") == cwd:
-                return p
-        raise SystemExit(f"no Codex sessions found for cwd {cwd}")
+        refs = self.list_sessions(cwd, limit=1)
+        if not refs:
+            raise SystemExit(f"no Codex sessions found for cwd {cwd}")
+        return refs[0].path
 
     def _title(self, sid: str) -> str:
         if not INDEX.exists():

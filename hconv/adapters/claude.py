@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..adapter import Adapter, register
+from ..adapter import Adapter, SessionRef, register
 from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
                       UserMessage)
 
@@ -105,8 +105,54 @@ def _cap_title(title: str) -> str:
     return title if len(title) <= 120 else title[:117].rstrip() + "..."
 
 
+def _peek_title(path: Path) -> str:
+    """Light scan for custom-title / ai-title without a full transcript parse."""
+    custom = ai = ""
+    try:
+        with path.open() as fh:
+            for i, line in enumerate(fh):
+                if i > 200:  # titles are near the top or sparse; don't walk MB files
+                    break
+                if not line.strip():
+                    continue
+                if "custom-title" not in line and "ai-title" not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d.get("type") == "custom-title":
+                    v = (d.get("customTitle") or "").strip()
+                    if v:
+                        custom = v
+                elif d.get("type") == "ai-title":
+                    v = (d.get("aiTitle") or "").strip()
+                    if v:
+                        ai = v
+                if custom:
+                    break
+    except OSError:
+        return ""
+    return custom or ai
+
+
 class ClaudeAdapter(Adapter):
     name = "claude"
+
+    def list_sessions(self, cwd: str, limit: int = 10) -> list[SessionRef]:
+        if limit < 1:
+            return []
+        d = PROJECTS / enc(cwd)
+        if not d.is_dir():
+            return []
+        files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        out = []
+        for p in files[:limit]:
+            out.append(SessionRef(
+                path=p, session_id=p.stem, mtime=p.stat().st_mtime,
+                title=_peek_title(p),
+            ))
+        return out
 
     def locate(self, cwd: str, session_id: str | None = None) -> Path:
         d = PROJECTS / enc(cwd)
@@ -115,10 +161,10 @@ class ClaudeAdapter(Adapter):
             if not p.exists():
                 raise SystemExit(f"no Claude session {session_id} under {d}")
             return p
-        files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not files:
+        refs = self.list_sessions(cwd, limit=1)
+        if not refs:
             raise SystemExit(f"no Claude sessions found for cwd {cwd} (looked in {d})")
-        return files[0]
+        return refs[0].path
 
     def read(self, path: Path) -> Session:
         sid = path.stem
