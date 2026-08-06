@@ -20,6 +20,13 @@ from ..common import (AssistantMessage, Session, ToolCall, ToolResult,
 
 PROJECTS = Path(os.path.expanduser("~/.claude/projects"))
 VERSION = "2.1.153"
+# Only the fallback. read() captures the SOURCE session's own model into
+# extra["source_model"] and write() prefers that, so a converted transcript
+# attributes each turn to the model that actually produced it. This constant
+# is used only when the source carried no model at all (e.g. a harness that
+# does not record one), and it is the one thing here that goes stale on its
+# own: bump it when the current Claude model changes.
+MODEL = "claude-opus-5"
 
 # Codex tool vocabulary -> Claude's, so converted calls render as native cards.
 INBOUND_NAMES = {"exec_command": "Bash", "shell": "Bash",
@@ -168,7 +175,7 @@ class ClaudeAdapter(Adapter):
 
     def read(self, path: Path) -> Session:
         sid = path.stem
-        cwd = git = started = custom_title = ai_title = ""
+        cwd = git = started = custom_title = ai_title = src_model = ""
         first_user_text = None
         mtime_ts = _iso_utc(path.stat().st_mtime)
         records = []
@@ -197,6 +204,11 @@ class ClaudeAdapter(Adapter):
             started = started or ts
             msg = d.get("message", {})
             role = msg.get("role")
+            # Surplus, not part of the common floor: the model that produced
+            # this turn. Last assistant row wins (a resumed session can change
+            # model mid-thread; the newest is the better default).
+            if role == "assistant" and msg.get("model"):
+                src_model = msg["model"]
             content = msg.get("content")
             if isinstance(content, str):
                 records.append((UserMessage if role == "user" else AssistantMessage)(content, ts))
@@ -234,6 +246,8 @@ class ClaudeAdapter(Adapter):
         title = custom_title or ai_title or _fallback_title(first_user_text)
         if title:
             s.extra["title"] = _cap_title(title)
+        if src_model:
+            s.extra["source_model"] = src_model
         return s
 
     def dest_path(self, session: Session, dest_cwd: str) -> Path:
@@ -272,7 +286,7 @@ class ClaudeAdapter(Adapter):
                        and blks[0]["type"] == "text" else blks)
             msg = {"role": s, "content": content}
             if s == "assistant":
-                msg["model"] = "claude-opus-4-7"
+                msg["model"] = session.extra.get("source_model") or MODEL
             rows.append({"parentUuid": prev, "isSidechain": False, "userType": "external",
                          "cwd": dest_cwd, "sessionId": session.session_id, "version": VERSION,
                          "gitBranch": session.git_branch, "type": s, "message": msg,

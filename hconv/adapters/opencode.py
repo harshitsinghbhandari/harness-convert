@@ -80,7 +80,7 @@ def _default_model() -> dict:
                     "modelID": recent[0]["modelID"]}
     except (OSError, ValueError, KeyError):
         pass
-    return {"providerID": "anthropic", "modelID": "claude-sonnet-4-6"}
+    return {"providerID": "anthropic", "modelID": "claude-sonnet-5"}
 
 
 class OpenCodeAdapter(Adapter):
