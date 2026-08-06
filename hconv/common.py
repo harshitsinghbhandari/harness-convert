@@ -200,7 +200,7 @@ def _est_freed(pool, cap: int) -> int:
         if nbytes <= cap:
             continue
         if is_image:
-            total += nbytes - len(IMAGE_MARK.format(
+            term = nbytes - len(IMAGE_MARK.format(
                 size=human_bytes(nbytes)).encode())
         else:
             # n=nbytes (not nbytes - cap) is an upper bound on the real marker's
@@ -211,7 +211,14 @@ def _est_freed(pool, cap: int) -> int:
             # makes the term linear in -cap with no cap-dependent marker-length
             # jump, which keeps _est_freed strictly decreasing in cap, the
             # precondition _search_cap's bisection needs.
-            total += nbytes - cap - len(TRIM_MARK.format(n=nbytes).encode())
+            term = nbytes - cap - len(TRIM_MARK.format(n=nbytes).encode())
+        # Floor at 0: as cap approaches nbytes the marker can cost more than it
+        # saves, going negative, then jump back to 0 once nbytes <= cap excludes
+        # the item outright. The real apply pass never realizes a negative
+        # "saving" either (_clip only replaces when new_n < nbytes), so this
+        # estimate must not count one; flooring removes the negative-then-0
+        # jump and restores strict monotonicity.
+        total += max(0, term)
     return total
 
 
