@@ -17,7 +17,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import Session, synthesize_missing_results
+from .common import (Session, synthesize_missing_results, truncate_payload,
+                     truncated_id)
 
 
 @dataclass(frozen=True)
@@ -109,14 +110,56 @@ def writable() -> list[str]:
 
 
 def convert(src_name: str, dst_name: str, cwd: str, dest_cwd: str,
-            session_id: str | None = None, write: bool = False):
-    """Run the full pipeline. Returns (session, dest_path). Writes only if asked."""
+            session_id: str | None = None, write: bool = False,
+            truncate: int = 0, new_id: bool = False):
+    """Run the full pipeline. Returns (session, dest_path). Writes only if asked.
+
+    truncate: percent of total payload to free (0 = off). new_id: give the
+    result a fresh deterministic session id so it lands beside its source
+    instead of overwriting it (what `hc truncate` wants).
+    """
     from .enrich import enrich
 
     src, dst = get(src_name), get(dst_name)
     path = src.locate(cwd, session_id)
     session = src.read(path)
     session.records = synthesize_missing_results(session.records)
+    if truncate:
+        # After synthesize (pairing invariants already hold), before enrich
+        # (so enrichers see final content and the marked-up title).
+        session.records, stats = truncate_payload(session.records, truncate)
+        session.extra["trim"] = stats
+        if new_id:
+            session.extra["source_session_id"] = session.session_id
+            session.session_id = truncated_id(session.session_id, truncate)
+        if session.extra.get("title"):
+            session.extra["title"] += f" [hc -{truncate}%]"
+        # Guard against resolving the destination back onto the source: same
+        # harness plus same dest_cwd plus new_id left off does exactly that,
+        # and a caller forgetting new_id=True must not silently destroy the
+        # un-truncated original. dest_path is documented as pure/no IO, so
+        # this check is safe to run on both the dry-run and write paths, and
+        # it compares resolved paths (not flags) so it holds no matter how
+        # harness/cwd/new_id were combined to get here.
+        dest_check = dst.dest_path(session, dest_cwd)
+        if dest_check.resolve() == path.resolve():
+            raise SystemExit(
+                f"refusing to truncate {path} onto itself, which would destroy "
+                "the original; pass new_id=True or a different --dest-cwd")
+        # The path check above cannot fire for an adapter that is not
+        # path-addressed (opencode's locate() returns "<db>#<id>" and
+        # dest_path() returns IMPORTS/<id>.json; those two strings can never
+        # be equal). Truncating a session into the SAME harness without a new
+        # id has no legitimate use regardless of how the destination is
+        # addressed: it can only mean overwriting the source, so refuse it
+        # directly on src_name == dst_name plus new_id left off. new_id=True
+        # is exactly what makes a same-harness truncate land beside its
+        # source instead, so it must not trip this.
+        if not new_id and src_name == dst_name:
+            raise SystemExit(
+                f"refusing to truncate a {src_name} session onto itself "
+                "(same harness, no new id), which would destroy the "
+                "original; pass new_id=True or a different --to harness")
     enrich(src_name, dst_name, session)
     if not write:
         return session, dst.dest_path(session, dest_cwd)

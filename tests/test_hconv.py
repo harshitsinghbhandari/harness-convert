@@ -52,6 +52,231 @@ def test_tail_closed():
     print("PASS tail-closed: every ToolCall has a ToolResult")
 
 
+def _big_session():
+    """Payload with a deliberate size spread: one whale, one image, small fry."""
+    return Session("test", "aaaa-bbbb-cccc-dddd-eeee", CWD, [
+        UserMessage("do the thing", "2026-08-06T01:00:00Z"),
+        AssistantMessage("on it", "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo", "description": "search"},
+                 "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "M" * 100_000, "2026-08-06T01:00:03Z"),      # the whale
+        ToolCall("c2", "Write", {"file_path": "/x.py", "content": "W" * 40_000},
+                 "2026-08-06T01:00:04Z"),
+        ToolResult("c2", "ok", "2026-08-06T01:00:05Z"),
+        ToolCall("c3", "view_image", {"path": "/s.png"}, "2026-08-06T01:00:06Z"),
+        ToolResult("c3", "iVBORw0KGgo" * 5_000, "2026-08-06T01:00:07Z"),  # image
+        ToolCall("c4", "Read", {"file_path": "/tiny.py"}, "2026-08-06T01:00:08Z"),
+        ToolResult("c4", "short", "2026-08-06T01:00:09Z"),
+    ], git_branch="main", started_at="2026-08-06T01:00:00Z")
+
+
+def test_truncate_meets_budget():
+    from hconv.common import truncate_payload, _pool, _est_freed
+    recs, st = truncate_payload(_big_session().records, 20)
+    assert st.freed_pct >= 20, f"freed {st.freed_pct:.1f}% < target 20%"
+    # gentlest cap: one byte more would miss the target
+    pool = _pool(_big_session().records)
+    want = st.total * 20 / 100
+    assert _est_freed(pool, st.cap) >= want, "cap must still free the target"
+    assert _est_freed(pool, st.cap + 1) < want, "cap+1 must miss the target"
+    # determinism: same inputs, same pct, same cap every time
+    _, again = truncate_payload(_big_session().records, 20)
+    assert again.cap == st.cap
+    assert st.cap > 0 and st.clipped >= 1
+    print(f"PASS truncate-budget: freed {st.freed_pct:.1f}% at cap {st.cap}B")
+
+
+def test_truncate_preserves_structure():
+    from hconv.common import truncate_payload
+    before = _big_session().records
+    n_calls = sum(1 for r in before if isinstance(r, ToolCall))
+    n_res = sum(1 for r in before if isinstance(r, ToolResult))
+    recs, _ = truncate_payload(_big_session().records, 40)
+    assert sum(1 for r in recs if isinstance(r, ToolCall)) == n_calls
+    assert sum(1 for r in recs if isinstance(r, ToolResult)) == n_res
+    orphans = {r.call_id for r in recs if isinstance(r, ToolCall)} - \
+              {r.call_id for r in recs if isinstance(r, ToolResult)}
+    assert not orphans, f"truncate orphaned {orphans}"
+    texts = [r.text for r in recs if isinstance(r, (UserMessage, AssistantMessage))]
+    assert texts == ["do the thing", "on it"], "conversation text must not be trimmed"
+    print("PASS truncate-structure: no record lost, pairing intact, text untouched")
+
+
+def test_truncate_inputs_stay_dicts():
+    from hconv.common import truncate_payload
+    # pct=40 alone is met by the whale (100_000B) + image (55_000B, all-or-nothing)
+    # without ever touching Write's 40_000B content field, so the gentlest-cap
+    # search correctly leaves it untouched at pct=40; 60 forces the cap below
+    # 40_000 so this test actually exercises dict-shape-preserving clipping.
+    recs, _ = truncate_payload(_big_session().records, 60)
+    write = [r for r in recs if isinstance(r, ToolCall) and r.name == "Write"][0]
+    assert isinstance(write.input, dict), "input must stay a dict"
+    assert set(write.input) == {"file_path", "content"}, "keys must survive"
+    assert write.input["file_path"] == "/x.py", "small field untouched"
+    assert len(write.input["content"]) < 40_000, "largest string field clipped"
+    assert "[hc truncated" in write.input["content"]
+    print("PASS truncate-inputs: dict shape kept, only the largest string clipped")
+
+
+def test_truncate_images_dropped():
+    from hconv.common import truncate_payload
+    recs, _ = truncate_payload(_big_session().records, 40)
+    img = [r for r in recs if isinstance(r, ToolResult) and r.call_id == "c3"][0]
+    assert img.output.startswith("[image, "), img.output[:40]
+    assert img.output.endswith("dropped by hc]"), img.output[-40:]
+    assert "iVBORw0KGgo" not in img.output, "base64 must not be head-clipped"
+
+    data_uri = Session("test", "x", CWD, [
+        ToolCall("d1", "Read", {"file_path": "/a.png"}, "2026-08-06T01:00:00Z"),
+        ToolResult("d1", "data:image/png;base64," + "Q" * 90_000,
+                   "2026-08-06T01:00:01Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    recs2, _ = truncate_payload(data_uri.records, 40)
+    assert recs2[1].output.startswith("[image, "), recs2[1].output[:40]
+    print("PASS truncate-images: view_image and data:image both dropped, not clipped")
+
+
+def test_truncate_shortfall_and_utf8():
+    from hconv.common import truncate_payload, truncated_id
+    talky = Session("test", "y", CWD, [
+        UserMessage("a" * 50_000, "2026-08-06T01:00:00Z"),
+        AssistantMessage("b" * 50_000, "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "x" * 100, "2026-08-06T01:00:03Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    _, st = truncate_payload(talky.records, 50)
+    assert st.freed_pct < 50, "50% is unreachable on an all-conversation session"
+    assert st.total > 0 and st.freed >= 0, "must report honestly, not raise"
+
+    multi = Session("test", "z", CWD, [
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:00Z"),
+        ToolResult("c1", "é" * 60_000, "2026-08-06T01:00:01Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    recs, _ = truncate_payload(multi.records, 30)
+    recs[1].output.encode("utf-8").decode("utf-8")   # raises if clipped mid-char
+
+    a = truncated_id("aaaa-bbbb", 20)
+    assert a == truncated_id("aaaa-bbbb", 20), "id must be deterministic"
+    assert a != truncated_id("aaaa-bbbb", 30), "different pct, different session"
+    assert a != "aaaa-bbbb", "must never collide with the original"
+    print("PASS truncate-shortfall: honest under-delivery, valid UTF-8, stable id")
+
+
+def test_trim_stats_conversation_bytes_honest():
+    """The shortfall message's 'X% of payload is conversation' figure must be
+    measured directly (TrimStats.conversation_bytes), not inferred by
+    subtracting pooled_bytes from total. pooled_bytes only counts the single
+    largest string field per ToolCall plus all outputs; a structured input
+    (AskUserQuestion.questions, a second string field on Edit) is neither
+    conversation nor pooled, and the old subtraction silently blamed it on
+    conversation, always biased upward."""
+    from hconv.common import truncate_payload
+
+    # Zero conversation: one Edit (two string fields, only the bigger pools)
+    # and one AskUserQuestion (a structured/list input, nothing pools at all).
+    # All of AskUserQuestion's bytes land in `total` and none in `pooled_bytes`,
+    # which is exactly what used to get mislabeled as conversation.
+    no_conv = [
+        ToolCall("c1", "Edit",
+                {"file_path": "x.py", "old_string": "a" * 1_000,
+                 "new_string": "b" * 3_000}, "2026-08-06T01:00:00Z"),
+        ToolResult("c1", "ok", "2026-08-06T01:00:01Z"),
+        ToolCall("c2", "AskUserQuestion",
+                {"questions": [{"question": "q" * 2_000}]},
+                "2026-08-06T01:00:02Z"),
+        ToolResult("c2", "answer", "2026-08-06T01:00:03Z"),
+    ]
+    _, st = truncate_payload(no_conv, 20)
+    assert st.conversation_bytes == 0, \
+        f"session has zero UserMessage/AssistantMessage; got {st.conversation_bytes}"
+    conv_share = 100 * st.conversation_bytes / st.total if st.total else 0
+    assert conv_share < 1, \
+        f"zero-conversation session reported {conv_share:.0f}% conversation"
+    # the old (buggy) formula on this same data would report a large,
+    # entirely-fictional conversation share:
+    old_formula = 100 - (100 * st.pooled_bytes / st.total if st.total else 0)
+    assert old_formula > 30, \
+        (f"test no longer reproduces the bug it pins: old formula gives "
+         f"{old_formula:.0f}%, expected it to be substantially wrong")
+
+    # Roughly half conversation, half tool payload (fully poolable, so the
+    # old formula happens to roughly agree here too -- this pins the honest
+    # case, not just the buggy one).
+    half = [
+        UserMessage("u" * 5_000, "2026-08-06T01:00:00Z"),
+        AssistantMessage("a" * 5_000, "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "r" * 10_000, "2026-08-06T01:00:03Z"),
+    ]
+    _, st2 = truncate_payload(half, 20)
+    assert st2.conversation_bytes == 10_000, st2.conversation_bytes
+    conv_share2 = 100 * st2.conversation_bytes / st2.total if st2.total else 0
+    assert 40 <= conv_share2 <= 60, \
+        f"roughly-half-conversation session reported {conv_share2:.0f}%"
+    print("PASS trim-stats-conversation-bytes: measured directly, honest at "
+          "0% and ~50% conversation")
+
+
+def test_est_freed_monotonic_and_search_cap_matches_bruteforce():
+    """_est_freed must be non-increasing in cap (the precondition _search_cap's
+    bisection needs), including right at each item's own cap == nbytes
+    exclusion boundary: as cap approaches nbytes, TRIM_MARK's overhead can
+    exceed the shrinking remainder, going negative, then jump back to 0 once
+    the item is excluded outright, an increase that breaks monotonicity.
+    Sweeps the FULL cap range (not a window carved away from the boundary)
+    and checks _search_cap against a brute-force scan over every reachable
+    `want`, not a few hand-picked values, on both single- and multi-item
+    pools, including pools where several payloads share one crossing point."""
+    from hconv.common import _est_freed, _search_cap
+
+    def freed_table(pool, hi):
+        # index i holds _est_freed(pool, i); index 0 unused, kept for 1-indexing.
+        return [None] + [_est_freed(pool, cap) for cap in range(1, hi + 1)]
+
+    def brute_best(table, want, hi):
+        best = 1
+        for cap in range(1, hi + 1):
+            if table[cap] >= want:
+                best = cap
+        return best
+
+    def check_pool(pool, label):
+        hi = max(n for n, _, _, _ in pool) + 2   # past every item's own cutoff
+        table = freed_table(pool, hi)
+        prev = table[1]
+        for cap in range(2, hi + 1):
+            cur = table[cap]
+            assert cur <= prev, \
+                f"{label}: _est_freed increased at cap={cap}: {prev} -> {cur}"
+            prev = cur
+        assert table[hi] == 0, f"{label}: fully-excluded cap should free 0"
+        for want in range(1, table[1] + 5):
+            expected = brute_best(table, want, hi)
+            got = _search_cap(pool, want)
+            assert got == expected, \
+                f"{label}: _search_cap(want={want}) = {got}, brute force = {expected}"
+
+    # single item, small enough for a fast exhaustive sweep, but the sweep
+    # still runs cap all the way past nbytes so the exclusion boundary itself
+    # is exercised, not carved around.
+    check_pool([(300, False, None, None)], "single-300")
+
+    # the reviewer's exact multi-item repro: at want=97 the true largest
+    # valid cap is 97 itself, not some smaller cap forced by a spurious dip.
+    check_pool([(97, False, None, None), (222, False, None, None)],
+               "reviewer-97-222")
+
+    # several payloads sharing one exact crossing point: two items excluded
+    # at the same cap simultaneously.
+    check_pool([(97, False, None, None), (222, False, None, None),
+                (222, False, None, None), (400, False, None, None)],
+               "shared-crossing")
+
+    print("PASS est-freed-monotonic: full-range sweep including the "
+          "cap==nbytes boundary, _search_cap matches brute force over every "
+          "reachable want, single- and multi-item pools with shared crossings")
+
+
 def test_codex_write_invariants(tmp):
     codex_mod.SESSIONS = Path(tmp) / "codex"
     codex_mod.INDEX = Path(tmp) / "codex_index.jsonl"
@@ -142,8 +367,10 @@ def test_title_enrichment(tmp):
                for r in rows), "title not in claude ai-title row"
 
     # a pair with NO enricher stays common-only (no surplus leaks)
+    # codex->cursor: cursor is read-only and has no enricher registered into it,
+    # unlike codex->codex, which this same task now registers on purpose.
     s3 = sample(); s3.extra["title"] = "should not appear"
-    enrich("codex", "codex", s3)  # unregistered pair
+    enrich("codex", "cursor", s3)  # unregistered pair
     assert "out" not in s3.extra, "surplus leaked for an unregistered pair"
 
     # claude -> grok: title lands as generated_title on summary.json
@@ -155,6 +382,136 @@ def test_title_enrichment(tmp):
     assert summary["generated_title"] == "Fix the failing test", summary
     assert summary["session_summary"] == "Fix the failing test", summary
     print("PASS title-enrichment: carried both ways, absent for unregistered pair")
+
+
+def test_same_harness_title_survives():
+    """Relocating within a harness is documented as lossless; the title is
+    part of that. Before this, no (X, X) enricher existed and it vanished."""
+    for harness, key in (("claude", "ai_title"), ("codex", "thread_name"),
+                         ("opencode", "opencode_title"), ("grok", "grok_title")):
+        s = sample()
+        s.extra["title"] = "keep me"
+        enrich(harness, harness, s)
+        got = s.extra.get("out", {}).get(key)
+        assert got == "keep me", f"{harness}->{harness} lost the title ({key}={got!r})"
+    print("PASS same-harness-title: claude/codex/opencode/grok keep their title")
+
+
+def test_convert_truncate_new_session(tmp):
+    """truncate writes a NEW session and never touches the original."""
+    claude_mod.PROJECTS = Path(tmp) / "claude_trunc"
+    src = sample()
+    src.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Z" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    src.extra["title"] = "original work"
+    original = claude_mod.ClaudeAdapter().write(src, CWD)
+    before = original.read_bytes()
+
+    session, dest = hconv.convert("claude", "claude", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=True)
+
+    assert dest != original, "truncate must not overwrite its source"
+    assert original.read_bytes() == before, "source file was modified"
+    assert dest.exists(), f"no truncated session at {dest}"
+
+    st = session.extra["trim"]
+    assert st.freed_pct >= 30, f"freed {st.freed_pct:.1f}% < 30%"
+    assert session.extra["source_session_id"] == src.session_id
+    assert session.session_id != src.session_id
+
+    body = dest.read_text()
+    assert "[hc truncated" in body, "clipped marker missing from written session"
+    assert "Z" * 80_000 not in body, "whale survived into the truncated session"
+    assert "[hc -30%]" in body, "truncated title should be distinguishable"
+
+    again, dest2 = hconv.convert("claude", "claude", CWD, CWD,
+                                 session_id=src.session_id, write=False,
+                                 truncate=30, new_id=True)
+    assert dest2 == dest, "same truncate must be deterministic, not pile up copies"
+    print("PASS convert-truncate: new session written, original byte-identical")
+
+
+def test_convert_truncate_refuses_self_overwrite(tmp):
+    """truncate(new_id=False) with same harness + same dest_cwd resolves the
+    destination onto the source path. That must be refused, not performed:
+    a caller forgetting new_id=True (or picking a same-cwd destination on
+    purpose) should never silently destroy the un-truncated original."""
+    claude_mod.PROJECTS = Path(tmp) / "claude_trunc_guard"
+    src = sample()
+    src.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Z" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    src.extra["title"] = "original work"
+    original = claude_mod.ClaudeAdapter().write(src, CWD)
+    before = original.read_bytes()
+
+    for write_flag in (True, False):
+        try:
+            hconv.convert("claude", "claude", CWD, CWD,
+                          session_id=src.session_id, write=write_flag,
+                          truncate=30, new_id=False)
+            raise AssertionError(
+                f"convert(write={write_flag}) should have refused the self-overwrite")
+        except SystemExit as e:
+            assert "refus" in str(e).lower(), f"unhelpful guard message: {e}"
+
+    assert original.read_bytes() == before, \
+        "guard tripped too late: original was already modified"
+
+    # new_id=True must still work exactly as before: lands beside the source.
+    session, dest = hconv.convert("claude", "claude", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=True)
+    assert dest != original, "new_id=True must still land beside the source"
+    assert dest.exists()
+
+    # opencode is not path-addressed: locate() returns "<db>#<session_id>" and
+    # dest_path() returns IMPORTS/<id>.json, so those two strings can never be
+    # equal and the resolved-path check above can never fire for it. The guard
+    # must still catch this via the adapter-agnostic src_name == dst_name
+    # condition, or `opencode import` on the written file would upsert the
+    # live session with truncated content and destroy the original.
+    oc_db = Path(tmp) / "oc_trunc_guard.db"
+    oc_sid = "ses_aaaaaaaaaaaaaaaaaaaaaaaa"
+    _make_oc_db(str(oc_db), oc_sid, CWD)
+    opencode_mod.DB = oc_db
+    opencode_mod.IMPORTS = Path(tmp) / "oc_trunc_guard_imports"
+    db_before = oc_db.read_bytes()
+
+    for write_flag in (True, False):
+        try:
+            hconv.convert("opencode", "opencode", CWD, CWD,
+                          session_id=oc_sid, write=write_flag,
+                          truncate=30, new_id=False)
+            raise AssertionError(
+                f"opencode convert(write={write_flag}) should have refused "
+                "the self-overwrite")
+        except SystemExit as e:
+            assert "refus" in str(e).lower(), f"unhelpful guard message: {e}"
+
+    assert oc_db.read_bytes() == db_before, "opencode source db was modified"
+    assert not (opencode_mod.IMPORTS / f"{oc_sid}.json").exists(), \
+        ("guard must prevent writing a same-id import artifact; that file "
+         "would let `opencode import` overwrite the live session")
+
+    # cross-harness truncate with new_id=False has no self-overwrite hazard
+    # (different harness, different store) and must keep working.
+    codex_mod.SESSIONS = Path(tmp) / "codex_trunc_guard"
+    codex_mod.INDEX = Path(tmp) / "codex_trunc_guard_index.jsonl"
+    session, dest = hconv.convert("claude", "codex", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=False)
+    assert dest.exists(), "cross-harness truncate with new_id=False must still work"
+
+    print("PASS convert-truncate-guard: self-overwrite refused on both dry-run "
+          "and write for claude and opencode, new_id and cross-harness paths "
+          "unaffected")
 
 
 def test_opencode_write_invariants(tmp):
@@ -780,14 +1137,76 @@ def test_cli_noninteractive_convert(tmp):
     print("PASS cli-noninteractive-convert: dry-run and -y write paths")
 
 
+def test_cli_truncate(tmp):
+    from hconv import cli
+    claude_mod.PROJECTS = Path(tmp) / "claude_cli_trunc"
+    s = sample()
+    s.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Q" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    original = claude_mod.ClaudeAdapter().write(s, CWD)
+    before = original.read_bytes()
+
+    def run(argv):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.dict(os.environ, {"HC_NO_INTERACTIVE": "1"}), \
+             mock.patch.object(sys, "stdout", buf):
+            cli.main()
+        return buf.getvalue()
+
+    base = ["hc", "truncate", "30", "--from", "claude", "--cwd", CWD,
+            "--dest-cwd", CWD, s.session_id]
+
+    out = run(base)
+    assert "dry run" in out, out
+    assert "cap" in out and "freed" in out, out
+    assert original.read_bytes() == before, "dry run must not write"
+
+    out = run(base + ["-y"])
+    assert "WROTE." in out, out
+    assert "claude --resume" in out, out
+    assert original.read_bytes() == before, "original must survive the write"
+
+    # percent is validated at the boundary
+    for bad in ("0", "100", "abc"):
+        try:
+            run(["hc", "truncate", bad, "--from", "claude", "--cwd", CWD])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError(f"percent {bad!r} should have been rejected")
+
+    # cursor is read-only, so it can never be a truncate source
+    try:
+        run(["hc", "truncate", "20", "--from", "cursor", "--cwd", CWD])
+    except SystemExit as e:
+        assert "read-only" in str(e), e
+    else:
+        raise AssertionError("truncating a cursor session should be refused")
+    print("PASS cli-truncate: dry-run, write, percent validation, cursor refused")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
+        test_truncate_meets_budget()
+        test_truncate_preserves_structure()
+        test_truncate_inputs_stay_dicts()
+        test_truncate_images_dropped()
+        test_truncate_shortfall_and_utf8()
+        test_trim_stats_conversation_bytes_honest()
+        test_est_freed_monotonic_and_search_cap_matches_bruteforce()
         test_codex_write_invariants(tmp)
         test_codex_tool_cards(tmp)
         test_claude_write_invariants(tmp)
         test_roundtrip_preserves_conversation(tmp)
         test_title_enrichment(tmp)
+        test_same_harness_title_survives()
+        test_convert_truncate_new_session(tmp)
+        test_convert_truncate_refuses_self_overwrite(tmp)
         test_opencode_write_invariants(tmp)
         test_opencode_read(tmp)
         test_cursor_read(tmp)
@@ -800,4 +1219,5 @@ if __name__ == "__main__":
         test_list_sessions(tmp)
         test_ui_helpers()
         test_cli_noninteractive_convert(tmp)
+        test_cli_truncate(tmp)
     print("\nALL PASS")
