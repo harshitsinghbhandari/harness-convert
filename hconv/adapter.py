@@ -134,6 +134,18 @@ def convert(src_name: str, dst_name: str, cwd: str, dest_cwd: str,
             session.session_id = truncated_id(session.session_id, truncate)
         if session.extra.get("title"):
             session.extra["title"] += f" [hc -{truncate}%]"
+        # Guard against resolving the destination back onto the source: same
+        # harness plus same dest_cwd plus new_id left off does exactly that,
+        # and a caller forgetting new_id=True must not silently destroy the
+        # un-truncated original. dest_path is documented as pure/no IO, so
+        # this check is safe to run on both the dry-run and write paths, and
+        # it compares resolved paths (not flags) so it holds no matter how
+        # harness/cwd/new_id were combined to get here.
+        dest_check = dst.dest_path(session, dest_cwd)
+        if dest_check.resolve() == path.resolve():
+            raise SystemExit(
+                f"refusing to truncate {path} onto itself, which would destroy "
+                "the original; pass new_id=True or a different --dest-cwd")
     enrich(src_name, dst_name, session)
     if not write:
         return session, dst.dest_path(session, dest_cwd)

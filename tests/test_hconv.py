@@ -380,6 +380,45 @@ def test_convert_truncate_new_session(tmp):
     print("PASS convert-truncate: new session written, original byte-identical")
 
 
+def test_convert_truncate_refuses_self_overwrite(tmp):
+    """truncate(new_id=False) with same harness + same dest_cwd resolves the
+    destination onto the source path. That must be refused, not performed:
+    a caller forgetting new_id=True (or picking a same-cwd destination on
+    purpose) should never silently destroy the un-truncated original."""
+    claude_mod.PROJECTS = Path(tmp) / "claude_trunc_guard"
+    src = sample()
+    src.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Z" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    src.extra["title"] = "original work"
+    original = claude_mod.ClaudeAdapter().write(src, CWD)
+    before = original.read_bytes()
+
+    for write_flag in (True, False):
+        try:
+            hconv.convert("claude", "claude", CWD, CWD,
+                          session_id=src.session_id, write=write_flag,
+                          truncate=30, new_id=False)
+            raise AssertionError(
+                f"convert(write={write_flag}) should have refused the self-overwrite")
+        except SystemExit as e:
+            assert "refus" in str(e).lower(), f"unhelpful guard message: {e}"
+
+    assert original.read_bytes() == before, \
+        "guard tripped too late: original was already modified"
+
+    # new_id=True must still work exactly as before: lands beside the source.
+    session, dest = hconv.convert("claude", "claude", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=True)
+    assert dest != original, "new_id=True must still land beside the source"
+    assert dest.exists()
+    print("PASS convert-truncate-guard: self-overwrite refused on both dry-run "
+          "and write, new_id path unaffected")
+
+
 def test_opencode_write_invariants(tmp):
     # write() emits the {info, messages} doc `opencode import` validates. Assert
     # the invariants that import (reverse-engineered) actually enforces.
@@ -1019,6 +1058,7 @@ if __name__ == "__main__":
         test_title_enrichment(tmp)
         test_same_harness_title_survives()
         test_convert_truncate_new_session(tmp)
+        test_convert_truncate_refuses_self_overwrite(tmp)
         test_opencode_write_invariants(tmp)
         test_opencode_read(tmp)
         test_cursor_read(tmp)
