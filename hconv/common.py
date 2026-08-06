@@ -117,6 +117,7 @@ class TrimStats:
     never taken from the cap search, so it always matches what lands on disk."""
     target_pct: int = 0
     total: int = 0          # bytes of ALL payload: text + tool inputs + outputs
+    conversation_bytes: int = 0  # bytes of UserMessage/AssistantMessage text (never trimmed)
     pooled: int = 0         # trimmable payloads considered
     pooled_bytes: int = 0   # bytes those payloads hold
     cap: int = 0
@@ -255,7 +256,9 @@ def truncate_payload(records: list[Record],
     stats = TrimStats(target_pct=pct)
     for r in records:
         if isinstance(r, (UserMessage, AssistantMessage)):
-            stats.total += len(r.text.encode())
+            n = len(r.text.encode())
+            stats.total += n
+            stats.conversation_bytes += n
         elif isinstance(r, ToolResult):
             stats.total += len(r.output.encode())
         elif isinstance(r, ToolCall):

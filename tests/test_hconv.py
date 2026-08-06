@@ -162,6 +162,61 @@ def test_truncate_shortfall_and_utf8():
     print("PASS truncate-shortfall: honest under-delivery, valid UTF-8, stable id")
 
 
+def test_trim_stats_conversation_bytes_honest():
+    """The shortfall message's 'X% of payload is conversation' figure must be
+    measured directly (TrimStats.conversation_bytes), not inferred by
+    subtracting pooled_bytes from total. pooled_bytes only counts the single
+    largest string field per ToolCall plus all outputs; a structured input
+    (AskUserQuestion.questions, a second string field on Edit) is neither
+    conversation nor pooled, and the old subtraction silently blamed it on
+    conversation, always biased upward."""
+    from hconv.common import truncate_payload
+
+    # Zero conversation: one Edit (two string fields, only the bigger pools)
+    # and one AskUserQuestion (a structured/list input, nothing pools at all).
+    # All of AskUserQuestion's bytes land in `total` and none in `pooled_bytes`,
+    # which is exactly what used to get mislabeled as conversation.
+    no_conv = [
+        ToolCall("c1", "Edit",
+                {"file_path": "x.py", "old_string": "a" * 1_000,
+                 "new_string": "b" * 3_000}, "2026-08-06T01:00:00Z"),
+        ToolResult("c1", "ok", "2026-08-06T01:00:01Z"),
+        ToolCall("c2", "AskUserQuestion",
+                {"questions": [{"question": "q" * 2_000}]},
+                "2026-08-06T01:00:02Z"),
+        ToolResult("c2", "answer", "2026-08-06T01:00:03Z"),
+    ]
+    _, st = truncate_payload(no_conv, 20)
+    assert st.conversation_bytes == 0, \
+        f"session has zero UserMessage/AssistantMessage; got {st.conversation_bytes}"
+    conv_share = 100 * st.conversation_bytes / st.total if st.total else 0
+    assert conv_share < 1, \
+        f"zero-conversation session reported {conv_share:.0f}% conversation"
+    # the old (buggy) formula on this same data would report a large,
+    # entirely-fictional conversation share:
+    old_formula = 100 - (100 * st.pooled_bytes / st.total if st.total else 0)
+    assert old_formula > 30, \
+        (f"test no longer reproduces the bug it pins: old formula gives "
+         f"{old_formula:.0f}%, expected it to be substantially wrong")
+
+    # Roughly half conversation, half tool payload (fully poolable, so the
+    # old formula happens to roughly agree here too -- this pins the honest
+    # case, not just the buggy one).
+    half = [
+        UserMessage("u" * 5_000, "2026-08-06T01:00:00Z"),
+        AssistantMessage("a" * 5_000, "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "r" * 10_000, "2026-08-06T01:00:03Z"),
+    ]
+    _, st2 = truncate_payload(half, 20)
+    assert st2.conversation_bytes == 10_000, st2.conversation_bytes
+    conv_share2 = 100 * st2.conversation_bytes / st2.total if st2.total else 0
+    assert 40 <= conv_share2 <= 60, \
+        f"roughly-half-conversation session reported {conv_share2:.0f}%"
+    print("PASS trim-stats-conversation-bytes: measured directly, honest at "
+          "0% and ~50% conversation")
+
+
 def test_est_freed_monotonic_and_search_cap_matches_bruteforce():
     """_est_freed must be non-increasing in cap (the precondition _search_cap's
     bisection needs), including right at each item's own cap == nbytes
@@ -415,8 +470,48 @@ def test_convert_truncate_refuses_self_overwrite(tmp):
                                   truncate=30, new_id=True)
     assert dest != original, "new_id=True must still land beside the source"
     assert dest.exists()
+
+    # opencode is not path-addressed: locate() returns "<db>#<session_id>" and
+    # dest_path() returns IMPORTS/<id>.json, so those two strings can never be
+    # equal and the resolved-path check above can never fire for it. The guard
+    # must still catch this via the adapter-agnostic src_name == dst_name
+    # condition, or `opencode import` on the written file would upsert the
+    # live session with truncated content and destroy the original.
+    oc_db = Path(tmp) / "oc_trunc_guard.db"
+    oc_sid = "ses_aaaaaaaaaaaaaaaaaaaaaaaa"
+    _make_oc_db(str(oc_db), oc_sid, CWD)
+    opencode_mod.DB = oc_db
+    opencode_mod.IMPORTS = Path(tmp) / "oc_trunc_guard_imports"
+    db_before = oc_db.read_bytes()
+
+    for write_flag in (True, False):
+        try:
+            hconv.convert("opencode", "opencode", CWD, CWD,
+                          session_id=oc_sid, write=write_flag,
+                          truncate=30, new_id=False)
+            raise AssertionError(
+                f"opencode convert(write={write_flag}) should have refused "
+                "the self-overwrite")
+        except SystemExit as e:
+            assert "refus" in str(e).lower(), f"unhelpful guard message: {e}"
+
+    assert oc_db.read_bytes() == db_before, "opencode source db was modified"
+    assert not (opencode_mod.IMPORTS / f"{oc_sid}.json").exists(), \
+        ("guard must prevent writing a same-id import artifact; that file "
+         "would let `opencode import` overwrite the live session")
+
+    # cross-harness truncate with new_id=False has no self-overwrite hazard
+    # (different harness, different store) and must keep working.
+    codex_mod.SESSIONS = Path(tmp) / "codex_trunc_guard"
+    codex_mod.INDEX = Path(tmp) / "codex_trunc_guard_index.jsonl"
+    session, dest = hconv.convert("claude", "codex", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=False)
+    assert dest.exists(), "cross-harness truncate with new_id=False must still work"
+
     print("PASS convert-truncate-guard: self-overwrite refused on both dry-run "
-          "and write, new_id path unaffected")
+          "and write for claude and opencode, new_id and cross-harness paths "
+          "unaffected")
 
 
 def test_opencode_write_invariants(tmp):
@@ -1102,6 +1197,7 @@ if __name__ == "__main__":
         test_truncate_inputs_stay_dicts()
         test_truncate_images_dropped()
         test_truncate_shortfall_and_utf8()
+        test_trim_stats_conversation_bytes_honest()
         test_est_freed_monotonic_and_search_cap_matches_bruteforce()
         test_codex_write_invariants(tmp)
         test_codex_tool_cards(tmp)

@@ -36,7 +36,8 @@
   <div class="ind">
     <pre><b>hc</b>                                              <span class="dim"># interactive wizard (TTY)</span>
 <b>hc</b> --from <u>HARNESS</u> --to <u>HARNESS</u> [<u>SESSION</u>] [<b>-y</b>|<b>--write</b>] ...
-<b>hc list</b> --from <u>HARNESS</u> [<b>-n</b> <u>N</u>]                 <span class="dim"># TTY: pick then convert</span></pre>
+<b>hc list</b> --from <u>HARNESS</u> [<b>-n</b> <u>N</u>]                 <span class="dim"># TTY: pick then convert</span>
+<b>hc truncate</b> <u>PCT</u> --from <u>HARNESS</u> [<u>SESSION</u>] [<b>-y</b>|<b>--write</b>]  <span class="dim"># new session, PCT% lighter</span></pre>
   </div>
 
   <h2 id="description"><a href="#description">DESCRIPTION</a></h2>
@@ -63,6 +64,13 @@
       Destination harness. Writable set: <b>claude</b>, <b>codex</b>,
       <b>opencode</b>, <b>grok</b>. <b>cursor</b> is source-only and rejected
       here.</p>
+    <p><b>hc truncate</b> <u>PCT</u><br>
+      Subcommand. Frees <u>PCT</u> percent (1-99) of a session's total payload
+      by clipping its heaviest tool payloads, and writes a NEW session in the
+      same harness with a deterministic derived id. The original session is
+      never modified. Dry run by default like the other commands;
+      <b>--write</b>/<b>-y</b> commits. <b>cursor</b> is read-only and cannot
+      be truncated.</p>
     <p><u>SESSION</u><br>
       Optional session id. Default: newest convertible session for the
       source cwd (last write / last activity, harness-specific).</p>
@@ -125,6 +133,21 @@ dest   : ~/.codex/sessions/.../rollout-...-ce0dc35e....jsonl
 ...
 <span class="ok">WROTE. resume with:</span>
   cd /proj &amp;&amp; opencode import &lt;file&gt; &amp;&amp; opencode -s ses_...</pre>
+
+    <p class="dim">Session too heavy to work in: free 20%, resume the lighter one:</p>
+    <pre><span class="ok">$</span> <b>hc truncate 20 --from claude</b>
+from   : claude  (ce0dc35e-...)
+trim   : 20% of 1.2MB payload
+cap    : 8.4KB  (clips 41 of 118 payloads)
+freed  : 240.0KB  1.2MB -&gt; 984.0KB
+new    : 7f3a9c21-...  (original untouched)
+dest   : ~/.claude/projects/.../7f3a9c21-....jsonl
+<span class="dim">(dry run; pass --write or -y to create it)</span>
+
+<span class="ok">$</span> <b>hc truncate 20 --from claude -y</b>
+...
+<span class="ok">WROTE. resume with:</span>
+  cd /proj &amp;&amp; claude --resume 7f3a9c21-...</pre>
   </div>
 
   <h2 id="how-it-works"><a href="#how-it-works">HOW IT WORKS</a></h2>

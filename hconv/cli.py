@@ -78,7 +78,7 @@ def _print_trim(stats) -> None:
     print(f"{ui.dim('freed')}   {human_bytes(freed)}  "
           f"{human_bytes(total)} -> {human_bytes(total - freed)}")
     if not stats.reached_target:
-        conv = 100 - (100 * stats.pooled_bytes / total if total else 0)
+        conv = 100 * stats.conversation_bytes / total if total else 0
         print(ui.dim(f"        target {stats.target_pct}% unreachable; freed "
                      f"{stats.freed_pct:.1f}% ({conv:.0f}% of payload is "
                      f"conversation, which is never trimmed)"))

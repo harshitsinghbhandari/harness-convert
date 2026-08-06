@@ -146,6 +146,20 @@ def convert(src_name: str, dst_name: str, cwd: str, dest_cwd: str,
             raise SystemExit(
                 f"refusing to truncate {path} onto itself, which would destroy "
                 "the original; pass new_id=True or a different --dest-cwd")
+        # The path check above cannot fire for an adapter that is not
+        # path-addressed (opencode's locate() returns "<db>#<id>" and
+        # dest_path() returns IMPORTS/<id>.json; those two strings can never
+        # be equal). Truncating a session into the SAME harness without a new
+        # id has no legitimate use regardless of how the destination is
+        # addressed: it can only mean overwriting the source, so refuse it
+        # directly on src_name == dst_name plus new_id left off. new_id=True
+        # is exactly what makes a same-harness truncate land beside its
+        # source instead, so it must not trip this.
+        if not new_id and src_name == dst_name:
+            raise SystemExit(
+                f"refusing to truncate a {src_name} session onto itself "
+                "(same harness, no new id), which would destroy the "
+                "original; pass new_id=True or a different --to harness")
     enrich(src_name, dst_name, session)
     if not write:
         return session, dst.dest_path(session, dest_cwd)
