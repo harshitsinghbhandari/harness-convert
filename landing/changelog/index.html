@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>hc changelog</title>
-<meta name="description" content="Release history for harness-convert (hc): Grok, Cursor, OpenCode, multi-session list, and earlier Codex/Claude conversion.">
+<meta name="description" content="Release history for harness-convert (hc): context truncation, Grok, Cursor, OpenCode, multi-session list, and earlier Codex/Claude conversion.">
 <meta property="og:title" content="hc changelog">
 <meta property="og:description" content="What's new in harness-convert, newest first.">
 <meta property="og:type" content="website">
@@ -41,6 +41,36 @@
 
   <h2 id="releases"><a href="#releases">RELEASES</a></h2>
   <div class="ind">
+
+    <section class="ver" id="v0.6.0">
+      <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.6.0">0.6.0</a></h3>
+      <p class="meta">2026-08-07</p>
+      <p><b>hc truncate</b> <u>PCT</u>: free context without losing the thread.
+        A long session is mostly dead tool payload, so this clips the heaviest
+        payloads until <u>PCT</u>% of the session is gone and writes a
+        <b>new</b> session in the same harness. The original is never touched,
+        so a bad trim costs nothing: resume it and pick a different number.
+        Dry run by default, like <b>hc convert</b>.</p>
+      <p>The policy came from measuring the 40 largest sessions per harness.
+        Payload concentration is extreme, so it clips the <b>biggest</b>
+        payloads rather than the oldest: on Codex, 41 records over 200KB are
+        45.9% of all payload, and the <i>newest</i> decile holds the most tool
+        output, so an oldest-first rule would free almost nothing. It pools
+        tool <b>inputs</b> alongside outputs (<b>Bash.command</b>,
+        <b>Write.content</b>, <b>Edit.new_string</b>) because inputs are 37% of
+        a Claude session and outputs alone cannot pass ~44% freed. Conversation
+        text is never clipped, <b>view_image</b> payloads are dropped whole
+        rather than head-clipped, and a target that cannot be reached reports an
+        honest shortfall instead of quietly under-delivering.</p>
+      <p>The new session id is a deterministic <b>uuid5</b> of the source id and
+        the percent, so re-running the same trim upserts one session instead of
+        piling up copies, while a different percent gives you a distinct one.
+        Cursor is read-only and cannot be truncated.</p>
+      <p class="dim">Also: same-harness relocation no longer drops the session
+        title (the enrichment map had no identity pairs, though the README
+        called that path lossless); converted Claude turns now carry the model
+        that actually produced them instead of a hardcoded id.</p>
+    </section>
 
     <section class="ver" id="v0.5.0">
       <h3><a href="https://github.com/harshitsinghbhandari/harness-convert/releases/tag/v0.5.0">0.5.0</a></h3>
@@ -130,7 +160,7 @@
       <a href="https://theharshitsingh.com">Harshit Singh Bhandari</a></p>
   </div>
 
-  <div class="manfoot"><span>harness-convert 0.5.0</span><span>2026-08-03</span><span>HC-CHANGELOG(7)</span></div>
+  <div class="manfoot"><span>harness-convert 0.6.0</span><span>2026-08-07</span><span>HC-CHANGELOG(7)</span></div>
 
 </div>
 </body>
