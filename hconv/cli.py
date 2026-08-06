@@ -11,6 +11,7 @@ need to be running or your quota intact.
     hc --from claude --to codex --write
     hc list --from claude -n 5         # list; TTY: pick one and convert
     hc list --from claude | cat        # plain table (no prompts)
+    hc truncate 20 --from claude       # new session, 20% lighter
 
 Flags always win. Missing pieces prompt on a TTY. Pipes / HC_NO_INTERACTIVE=1
 stay non-interactive. Stdlib only.
@@ -26,6 +27,7 @@ from datetime import datetime, timezone
 
 from hconv import convert, get, known, writable
 from hconv import ui
+from hconv.common import human_bytes
 
 
 RESUME = {
@@ -65,6 +67,21 @@ def _print_preview(from_h: str, to_h: str, session, dest, dest_cwd: str) -> None
     if title:
         print(f"{ui.dim('title')}   {title}")
     print(f"{ui.dim('dest')}    {dest}")
+
+
+def _print_trim(stats) -> None:
+    """The three lines that make a trim auditable before it is written."""
+    total, freed = stats.total, stats.freed
+    print(f"{ui.dim('trim')}    {stats.target_pct}% of {human_bytes(total)} payload")
+    print(f"{ui.dim('cap')}     {human_bytes(stats.cap)}  "
+          f"(clips {stats.clipped} of {stats.pooled} payloads)")
+    print(f"{ui.dim('freed')}   {human_bytes(freed)}  "
+          f"{human_bytes(total)} -> {human_bytes(total - freed)}")
+    if not stats.reached_target:
+        conv = 100 - (100 * stats.pooled_bytes / total if total else 0)
+        print(ui.dim(f"        target {stats.target_pct}% unreachable; freed "
+                     f"{stats.freed_pct:.1f}% ({conv:.0f}% of payload is "
+                     f"conversation, which is never trimmed)"))
 
 
 def _print_resume(to_h: str, session, dest, dest_cwd: str) -> None:
@@ -115,6 +132,16 @@ def _resolve_session(from_h: str, cwd: str, session_id: str | None,
     return refs[idx].session_id
 
 
+def _pct(raw: str) -> int:
+    try:
+        n = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"percent must be a number, got {raw!r}")
+    if not 1 <= n <= 99:
+        raise argparse.ArgumentTypeError(f"percent must be 1-99, got {n}")
+    return n
+
+
 def run_convert(from_h: str | None, to_h: str | None, cwd: str, dest_cwd: str | None,
                 session_id: str | None, write: bool, yes: bool,
                 interactive: bool, pick_limit: int = 15) -> None:
@@ -159,6 +186,40 @@ def cmd_convert(a):
         interactive=interactive,
         pick_limit=a.n,
     )
+
+
+def cmd_truncate(a):
+    """Shrink a session in place: same harness, NEW id, original untouched."""
+    interactive = ui.can_interact(not a.no_interactive)
+    from_h = _resolve_from(a.from_harness, interactive)
+    if from_h not in writable():
+        raise SystemExit(f"error: cannot truncate a '{from_h}' session (read-only)")
+    session_id = _resolve_session(from_h, a.cwd, session_id=a.session_id,
+                                  interactive=interactive, limit=a.n)
+    dest_cwd = a.dest_cwd or a.cwd
+
+    session, dest = convert(from_h, from_h, a.cwd, dest_cwd,
+                            session_id=session_id, write=False,
+                            truncate=a.pct, new_id=True)
+    stats = session.extra["trim"]
+
+    src_id = session.extra.get("source_session_id", session.session_id)
+    print(f"{ui.dim('from')}    {ui.bold(from_h)}  {src_id}")
+    _print_trim(stats)
+    print(f"{ui.dim('new')}     {session.session_id}  {ui.dim('(original untouched)')}")
+    print(f"{ui.dim('dest')}    {dest}")
+
+    do_write = bool(a.write or a.yes)
+    if not do_write and interactive:
+        do_write = ui.confirm("Write truncated session?", default=False)
+    if not do_write:
+        print()
+        print(ui.dim("(dry run; pass --write or -y to create it, "
+                     "or confirm when prompted)"))
+        return
+
+    dest = get(from_h).write(session, dest_cwd)
+    _print_resume(from_h, session, dest, dest_cwd)
 
 
 def cmd_list(a):
@@ -252,10 +313,27 @@ def main():
                    help="when converting after pick: write without asking")
     l.set_defaults(func=cmd_list)
 
+    t = sub.add_parser("truncate",
+                       help="shrink a session to free context "
+                            "(writes a NEW session; original untouched)")
+    add_common(t)
+    t.add_argument("pct", type=_pct, metavar="PCT",
+                   help="percent of total payload to free (1-99)")
+    t.add_argument("session_id", nargs="?", default=None,
+                   help="session id (default: pick / latest for cwd)")
+    t.add_argument("--dest-cwd", default=None,
+                   help="destination folder (default: same as --cwd)")
+    t.add_argument("--write", action="store_true", help="write without asking")
+    t.add_argument("-y", "--yes", action="store_true",
+                   help="write without asking (alias: implies write)")
+    t.add_argument("-n", type=int, default=15, metavar="N",
+                   help="how many sessions to offer when picking (default: 15)")
+    t.set_defaults(func=cmd_truncate)
+
     # bare `hc` == interactive convert; bare `hc --from X --to Y` == convert
     if len(sys.argv) == 1:
         sys.argv.append("convert")
-    elif sys.argv[1] not in ("convert", "list", "-h", "--help"):
+    elif sys.argv[1] not in ("convert", "list", "truncate", "-h", "--help"):
         sys.argv.insert(1, "convert")
 
     args = ap.parse_args()

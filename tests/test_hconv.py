@@ -1042,6 +1042,58 @@ def test_cli_noninteractive_convert(tmp):
     print("PASS cli-noninteractive-convert: dry-run and -y write paths")
 
 
+def test_cli_truncate(tmp):
+    from hconv import cli
+    claude_mod.PROJECTS = Path(tmp) / "claude_cli_trunc"
+    s = sample()
+    s.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Q" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    original = claude_mod.ClaudeAdapter().write(s, CWD)
+    before = original.read_bytes()
+
+    def run(argv):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.dict(os.environ, {"HC_NO_INTERACTIVE": "1"}), \
+             mock.patch.object(sys, "stdout", buf):
+            cli.main()
+        return buf.getvalue()
+
+    base = ["hc", "truncate", "30", "--from", "claude", "--cwd", CWD,
+            "--dest-cwd", CWD, s.session_id]
+
+    out = run(base)
+    assert "dry run" in out, out
+    assert "cap" in out and "freed" in out, out
+    assert original.read_bytes() == before, "dry run must not write"
+
+    out = run(base + ["-y"])
+    assert "WROTE." in out, out
+    assert "claude --resume" in out, out
+    assert original.read_bytes() == before, "original must survive the write"
+
+    # percent is validated at the boundary
+    for bad in ("0", "100", "abc"):
+        try:
+            run(["hc", "truncate", bad, "--from", "claude", "--cwd", CWD])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError(f"percent {bad!r} should have been rejected")
+
+    # cursor is read-only, so it can never be a truncate source
+    try:
+        run(["hc", "truncate", "20", "--from", "cursor", "--cwd", CWD])
+    except SystemExit as e:
+        assert "read-only" in str(e), e
+    else:
+        raise AssertionError("truncating a cursor session should be refused")
+    print("PASS cli-truncate: dry-run, write, percent validation, cursor refused")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
@@ -1071,4 +1123,5 @@ if __name__ == "__main__":
         test_list_sessions(tmp)
         test_ui_helpers()
         test_cli_noninteractive_convert(tmp)
+        test_cli_truncate(tmp)
     print("\nALL PASS")
