@@ -162,6 +162,63 @@ def test_truncate_shortfall_and_utf8():
     print("PASS truncate-shortfall: honest under-delivery, valid UTF-8, stable id")
 
 
+def test_est_freed_monotonic_and_search_cap_matches_bruteforce():
+    """Regression for the fixed non-image term in _est_freed: the marker's `n`
+    used to track (nbytes - cap), so shrinking cap by 1 could cross a
+    thousands-comma boundary in TRIM_MARK ("1,000" -> "999", 5 chars -> 3),
+    making the marker shrink by 2 while the freed remainder only dropped by 1:
+    net, _est_freed could INCREASE as cap grew. That broke the strict
+    monotonicity _search_cap's bisection requires. Pin: the estimate is
+    non-increasing in cap, and _search_cap agrees with a brute-force scan."""
+    from hconv.common import _est_freed, _search_cap
+
+    # the reviewer's exact repro: one payload straddling a thousands boundary
+    # right around cap 49000/49001 (nbytes - cap crosses 1,000 -> 999 there).
+    pool = [(50000, False, None, None)]
+    assert _est_freed(pool, 49001) <= _est_freed(pool, 49000), \
+        "cap+1 must never free more than cap"
+    prev = _est_freed(pool, 48500)
+    for cap in range(48501, 49501):
+        cur = _est_freed(pool, cap)
+        assert cur <= prev, f"_est_freed increased at cap={cap}: {prev} -> {cur}"
+        prev = cur
+
+    # a pool with two payloads whose remainders (nbytes - cap) each cross
+    # several thousands-comma boundaries across the swept cap range, with
+    # nbytes kept above the swept range so no item's own exclusion cutoff
+    # (nbytes <= cap) is crossed; that cutoff is a separate, unrelated edge.
+    mixed = [(20000, False, None, None), (7000, False, None, None)]
+    prev = _est_freed(mixed, 1)
+    for cap in range(2, 6001):
+        cur = _est_freed(mixed, cap)
+        assert cur <= prev, f"_est_freed increased at cap={cap} (mixed pool)"
+        prev = cur
+
+    def brute_search(pool, want):
+        hi = max(n for n, _, _, _ in pool)
+        best = 1
+        for cap in range(1, hi + 1):
+            if _est_freed(pool, cap) >= want:
+                best = cap
+        return best
+
+    # reviewer's 200x3994 case: bisection over the old, non-monotonic
+    # estimate could prune the true optimum and return a smaller cap.
+    small = [(3994, False, None, None)] * 200
+    want = 194200
+    assert _search_cap(small, want) == brute_search(small, want), \
+        "_search_cap must match a brute-force scan for the largest valid cap"
+
+    small2 = [(100, False, None, None), (2500, False, None, None),
+              (9999, False, None, None), (50000, False, None, None)]
+    for want in (100, 5000, 20000, 60000, 150000):
+        assert _search_cap(small2, want) == brute_search(small2, want), \
+            f"_search_cap diverged from brute force at want={want}"
+
+    print("PASS est-freed-monotonic: _est_freed non-increasing across thousands "
+          "boundaries, _search_cap matches brute force")
+
+
 def test_codex_write_invariants(tmp):
     codex_mod.SESSIONS = Path(tmp) / "codex"
     codex_mod.INDEX = Path(tmp) / "codex_index.jsonl"
@@ -898,6 +955,7 @@ if __name__ == "__main__":
         test_truncate_inputs_stay_dicts()
         test_truncate_images_dropped()
         test_truncate_shortfall_and_utf8()
+        test_est_freed_monotonic_and_search_cap_matches_bruteforce()
         test_codex_write_invariants(tmp)
         test_codex_tool_cards(tmp)
         test_claude_write_invariants(tmp)

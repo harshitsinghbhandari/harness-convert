@@ -203,7 +203,15 @@ def _est_freed(pool, cap: int) -> int:
             total += nbytes - len(IMAGE_MARK.format(
                 size=human_bytes(nbytes)).encode())
         else:
-            total += nbytes - cap - len(TRIM_MARK.format(n=nbytes - cap).encode())
+            # n=nbytes (not nbytes - cap) is an upper bound on the real marker's
+            # n (which is nbytes - len(head)), so the marker length here is an
+            # over-estimate and this term is a slight UNDER-estimate of the real
+            # freed bytes. That is conservative in the safe direction (the
+            # search can only pick a cap that frees at least `want`), and it
+            # makes the term linear in -cap with no cap-dependent marker-length
+            # jump, which keeps _est_freed strictly decreasing in cap, the
+            # precondition _search_cap's bisection needs.
+            total += nbytes - cap - len(TRIM_MARK.format(n=nbytes).encode())
     return total
 
 
