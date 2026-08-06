@@ -85,8 +85,11 @@ of total payload is freed, and writes a **new session in the same harness**.
    `update_plan.plan` is never clipped. Ceiling: ~1.5% of Claude payload,
    ~0.3% of Codex. Upgrade path if it ever matters: recurse into the input and
    pool the largest leaf string.
-2. Binary-search the smallest cap where clipping everything above it frees
-   `>= pct` of total payload.
+2. Binary-search the **largest** cap where clipping everything above it frees
+   `>= pct` of total payload. Freed shrinks as the cap grows, so every cap in
+   `[1, threshold]` meets the target and the largest one is the gentlest. An
+   earlier draft of this spec said "smallest", which would have selected a
+   1-byte cap and destroyed every payload in the session.
 3. Apply the cap.
 
 Total payload = user text + assistant text + tool inputs + tool outputs, so
@@ -128,9 +131,14 @@ a 1% target. Matched by tool name (`view_image`) or an output starting with
 ```
 
 This feeds back into step 2: when scoring a candidate cap, an image payload
-contributes `size - len(marker)` to the freed total, not `size - cap`. The
-binary search must use the same per-payload freed function that application
-uses, or the reported `freed` will not match what lands on disk.
+contributes `size - len(marker)` to the freed total, not `size - cap`.
+
+The search scores candidate caps arithmetically from precomputed sizes, never
+by building clipped strings, so a 21-probe search over 20k payloads does no
+string work. That estimate is exact except for UTF-8 backoff, which costs at
+most 3 bytes per clipped payload. Reported `freed` is therefore accumulated
+during the **apply** pass, not taken from the search, so the number printed is
+always the number that landed on disk.
 
 This matters: `view_image` alone is 34.7MB across 48 calls, 50% of all Codex
 tool output in the sample.
