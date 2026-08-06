@@ -52,6 +52,116 @@ def test_tail_closed():
     print("PASS tail-closed: every ToolCall has a ToolResult")
 
 
+def _big_session():
+    """Payload with a deliberate size spread: one whale, one image, small fry."""
+    return Session("test", "aaaa-bbbb-cccc-dddd-eeee", CWD, [
+        UserMessage("do the thing", "2026-08-06T01:00:00Z"),
+        AssistantMessage("on it", "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo", "description": "search"},
+                 "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "M" * 100_000, "2026-08-06T01:00:03Z"),      # the whale
+        ToolCall("c2", "Write", {"file_path": "/x.py", "content": "W" * 40_000},
+                 "2026-08-06T01:00:04Z"),
+        ToolResult("c2", "ok", "2026-08-06T01:00:05Z"),
+        ToolCall("c3", "view_image", {"path": "/s.png"}, "2026-08-06T01:00:06Z"),
+        ToolResult("c3", "iVBORw0KGgo" * 5_000, "2026-08-06T01:00:07Z"),  # image
+        ToolCall("c4", "Read", {"file_path": "/tiny.py"}, "2026-08-06T01:00:08Z"),
+        ToolResult("c4", "short", "2026-08-06T01:00:09Z"),
+    ], git_branch="main", started_at="2026-08-06T01:00:00Z")
+
+
+def test_truncate_meets_budget():
+    from hconv.common import truncate_payload, _pool, _est_freed
+    recs, st = truncate_payload(_big_session().records, 20)
+    assert st.freed_pct >= 20, f"freed {st.freed_pct:.1f}% < target 20%"
+    # gentlest cap: one byte more would miss the target
+    pool = _pool(_big_session().records)
+    want = st.total * 20 / 100
+    assert _est_freed(pool, st.cap) >= want, "cap must still free the target"
+    assert _est_freed(pool, st.cap + 1) < want, "cap+1 must miss the target"
+    # determinism: same inputs, same pct, same cap every time
+    _, again = truncate_payload(_big_session().records, 20)
+    assert again.cap == st.cap
+    assert st.cap > 0 and st.clipped >= 1
+    print(f"PASS truncate-budget: freed {st.freed_pct:.1f}% at cap {st.cap}B")
+
+
+def test_truncate_preserves_structure():
+    from hconv.common import truncate_payload
+    before = _big_session().records
+    n_calls = sum(1 for r in before if isinstance(r, ToolCall))
+    n_res = sum(1 for r in before if isinstance(r, ToolResult))
+    recs, _ = truncate_payload(_big_session().records, 40)
+    assert sum(1 for r in recs if isinstance(r, ToolCall)) == n_calls
+    assert sum(1 for r in recs if isinstance(r, ToolResult)) == n_res
+    orphans = {r.call_id for r in recs if isinstance(r, ToolCall)} - \
+              {r.call_id for r in recs if isinstance(r, ToolResult)}
+    assert not orphans, f"truncate orphaned {orphans}"
+    texts = [r.text for r in recs if isinstance(r, (UserMessage, AssistantMessage))]
+    assert texts == ["do the thing", "on it"], "conversation text must not be trimmed"
+    print("PASS truncate-structure: no record lost, pairing intact, text untouched")
+
+
+def test_truncate_inputs_stay_dicts():
+    from hconv.common import truncate_payload
+    # pct=40 alone is met by the whale (100_000B) + image (55_000B, all-or-nothing)
+    # without ever touching Write's 40_000B content field, so the gentlest-cap
+    # search correctly leaves it untouched at pct=40; 60 forces the cap below
+    # 40_000 so this test actually exercises dict-shape-preserving clipping.
+    recs, _ = truncate_payload(_big_session().records, 60)
+    write = [r for r in recs if isinstance(r, ToolCall) and r.name == "Write"][0]
+    assert isinstance(write.input, dict), "input must stay a dict"
+    assert set(write.input) == {"file_path", "content"}, "keys must survive"
+    assert write.input["file_path"] == "/x.py", "small field untouched"
+    assert len(write.input["content"]) < 40_000, "largest string field clipped"
+    assert "[hc truncated" in write.input["content"]
+    print("PASS truncate-inputs: dict shape kept, only the largest string clipped")
+
+
+def test_truncate_images_dropped():
+    from hconv.common import truncate_payload
+    recs, _ = truncate_payload(_big_session().records, 40)
+    img = [r for r in recs if isinstance(r, ToolResult) and r.call_id == "c3"][0]
+    assert img.output.startswith("[image, "), img.output[:40]
+    assert img.output.endswith("dropped by hc]"), img.output[-40:]
+    assert "iVBORw0KGgo" not in img.output, "base64 must not be head-clipped"
+
+    data_uri = Session("test", "x", CWD, [
+        ToolCall("d1", "Read", {"file_path": "/a.png"}, "2026-08-06T01:00:00Z"),
+        ToolResult("d1", "data:image/png;base64," + "Q" * 90_000,
+                   "2026-08-06T01:00:01Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    recs2, _ = truncate_payload(data_uri.records, 40)
+    assert recs2[1].output.startswith("[image, "), recs2[1].output[:40]
+    print("PASS truncate-images: view_image and data:image both dropped, not clipped")
+
+
+def test_truncate_shortfall_and_utf8():
+    from hconv.common import truncate_payload, truncated_id
+    talky = Session("test", "y", CWD, [
+        UserMessage("a" * 50_000, "2026-08-06T01:00:00Z"),
+        AssistantMessage("b" * 50_000, "2026-08-06T01:00:01Z"),
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:02Z"),
+        ToolResult("c1", "x" * 100, "2026-08-06T01:00:03Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    _, st = truncate_payload(talky.records, 50)
+    assert st.freed_pct < 50, "50% is unreachable on an all-conversation session"
+    assert st.total > 0 and st.freed >= 0, "must report honestly, not raise"
+
+    multi = Session("test", "z", CWD, [
+        ToolCall("c1", "Bash", {"command": "ls"}, "2026-08-06T01:00:00Z"),
+        ToolResult("c1", "é" * 60_000, "2026-08-06T01:00:01Z"),
+    ], started_at="2026-08-06T01:00:00Z")
+    recs, _ = truncate_payload(multi.records, 30)
+    recs[1].output.encode("utf-8").decode("utf-8")   # raises if clipped mid-char
+
+    a = truncated_id("aaaa-bbbb", 20)
+    assert a == truncated_id("aaaa-bbbb", 20), "id must be deterministic"
+    assert a != truncated_id("aaaa-bbbb", 30), "different pct, different session"
+    assert a != "aaaa-bbbb", "must never collide with the original"
+    print("PASS truncate-shortfall: honest under-delivery, valid UTF-8, stable id")
+
+
 def test_codex_write_invariants(tmp):
     codex_mod.SESSIONS = Path(tmp) / "codex"
     codex_mod.INDEX = Path(tmp) / "codex_index.jsonl"
@@ -783,6 +893,11 @@ def test_cli_noninteractive_convert(tmp):
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_tail_closed()
+        test_truncate_meets_budget()
+        test_truncate_preserves_structure()
+        test_truncate_inputs_stay_dicts()
+        test_truncate_images_dropped()
+        test_truncate_shortfall_and_utf8()
         test_codex_write_invariants(tmp)
         test_codex_tool_cards(tmp)
         test_claude_write_invariants(tmp)
