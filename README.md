@@ -75,8 +75,7 @@ head-clipped, since 4KB of base64 is bounded junk rather than information.
 
 The new id is `uuid5("harness-convert:truncate:<orig>:<pct>")`: deterministic,
 so re-running the same trim upserts one session instead of piling up copies.
-Cursor is read-only and cannot be truncated. Design notes and the full
-measurements: `docs/superpowers/specs/2026-08-06-truncate-subcommand-design.md`.
+Cursor is read-only and cannot be truncated.
 
 ## Install
 
