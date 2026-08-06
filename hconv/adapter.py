@@ -17,7 +17,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import Session, synthesize_missing_results
+from .common import (Session, synthesize_missing_results, truncate_payload,
+                     truncated_id)
 
 
 @dataclass(frozen=True)
@@ -109,14 +110,30 @@ def writable() -> list[str]:
 
 
 def convert(src_name: str, dst_name: str, cwd: str, dest_cwd: str,
-            session_id: str | None = None, write: bool = False):
-    """Run the full pipeline. Returns (session, dest_path). Writes only if asked."""
+            session_id: str | None = None, write: bool = False,
+            truncate: int = 0, new_id: bool = False):
+    """Run the full pipeline. Returns (session, dest_path). Writes only if asked.
+
+    truncate: percent of total payload to free (0 = off). new_id: give the
+    result a fresh deterministic session id so it lands beside its source
+    instead of overwriting it (what `hc truncate` wants).
+    """
     from .enrich import enrich
 
     src, dst = get(src_name), get(dst_name)
     path = src.locate(cwd, session_id)
     session = src.read(path)
     session.records = synthesize_missing_results(session.records)
+    if truncate:
+        # After synthesize (pairing invariants already hold), before enrich
+        # (so enrichers see final content and the marked-up title).
+        session.records, stats = truncate_payload(session.records, truncate)
+        session.extra["trim"] = stats
+        if new_id:
+            session.extra["source_session_id"] = session.session_id
+            session.session_id = truncated_id(session.session_id, truncate)
+        if session.extra.get("title"):
+            session.extra["title"] += f" [hc -{truncate}%]"
     enrich(src_name, dst_name, session)
     if not write:
         return session, dst.dest_path(session, dest_cwd)

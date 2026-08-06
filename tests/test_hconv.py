@@ -342,6 +342,44 @@ def test_same_harness_title_survives():
     print("PASS same-harness-title: claude/codex/opencode/grok keep their title")
 
 
+def test_convert_truncate_new_session(tmp):
+    """truncate writes a NEW session and never touches the original."""
+    claude_mod.PROJECTS = Path(tmp) / "claude_trunc"
+    src = sample()
+    src.records = [
+        UserMessage("go", "2026-08-06T01:00:00Z"),
+        ToolCall("c1", "Bash", {"command": "rg foo"}, "2026-08-06T01:00:01Z"),
+        ToolResult("c1", "Z" * 80_000, "2026-08-06T01:00:02Z"),
+    ]
+    src.extra["title"] = "original work"
+    original = claude_mod.ClaudeAdapter().write(src, CWD)
+    before = original.read_bytes()
+
+    session, dest = hconv.convert("claude", "claude", CWD, CWD,
+                                  session_id=src.session_id, write=True,
+                                  truncate=30, new_id=True)
+
+    assert dest != original, "truncate must not overwrite its source"
+    assert original.read_bytes() == before, "source file was modified"
+    assert dest.exists(), f"no truncated session at {dest}"
+
+    st = session.extra["trim"]
+    assert st.freed_pct >= 30, f"freed {st.freed_pct:.1f}% < 30%"
+    assert session.extra["source_session_id"] == src.session_id
+    assert session.session_id != src.session_id
+
+    body = dest.read_text()
+    assert "[hc truncated" in body, "clipped marker missing from written session"
+    assert "Z" * 80_000 not in body, "whale survived into the truncated session"
+    assert "[hc -30%]" in body, "truncated title should be distinguishable"
+
+    again, dest2 = hconv.convert("claude", "claude", CWD, CWD,
+                                 session_id=src.session_id, write=False,
+                                 truncate=30, new_id=True)
+    assert dest2 == dest, "same truncate must be deterministic, not pile up copies"
+    print("PASS convert-truncate: new session written, original byte-identical")
+
+
 def test_opencode_write_invariants(tmp):
     # write() emits the {info, messages} doc `opencode import` validates. Assert
     # the invariants that import (reverse-engineered) actually enforces.
@@ -980,6 +1018,7 @@ if __name__ == "__main__":
         test_roundtrip_preserves_conversation(tmp)
         test_title_enrichment(tmp)
         test_same_harness_title_survives()
+        test_convert_truncate_new_session(tmp)
         test_opencode_write_invariants(tmp)
         test_opencode_read(tmp)
         test_cursor_read(tmp)
