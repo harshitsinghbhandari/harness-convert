@@ -110,3 +110,31 @@ def _grok_to_codex(s: Session) -> None:
 def _grok_to_opencode(s: Session) -> None:
     if s.extra.get("title"):
         s.extra.setdefault("out", {})["opencode_title"] = s.extra["title"]
+
+
+# Same-harness relocation (a cwd move, or `hc truncate`) is documented as a
+# lossless metadata rewrite. Without these four the title silently vanished,
+# because the map only ever held cross-harness pairs.
+
+@register("claude", "claude")
+def _claude_to_claude(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["ai_title"] = s.extra["title"]
+
+
+@register("codex", "codex")
+def _codex_to_codex(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["thread_name"] = s.extra["title"]
+
+
+@register("opencode", "opencode")
+def _opencode_to_opencode(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["opencode_title"] = s.extra["title"]
+
+
+@register("grok", "grok")
+def _grok_to_grok(s: Session) -> None:
+    if s.extra.get("title"):
+        s.extra.setdefault("out", {})["grok_title"] = s.extra["title"]

@@ -312,8 +312,10 @@ def test_title_enrichment(tmp):
                for r in rows), "title not in claude ai-title row"
 
     # a pair with NO enricher stays common-only (no surplus leaks)
+    # codex->cursor: cursor is read-only and has no enricher registered into it,
+    # unlike codex->codex, which this same task now registers on purpose.
     s3 = sample(); s3.extra["title"] = "should not appear"
-    enrich("codex", "codex", s3)  # unregistered pair
+    enrich("codex", "cursor", s3)  # unregistered pair
     assert "out" not in s3.extra, "surplus leaked for an unregistered pair"
 
     # claude -> grok: title lands as generated_title on summary.json
@@ -325,6 +327,19 @@ def test_title_enrichment(tmp):
     assert summary["generated_title"] == "Fix the failing test", summary
     assert summary["session_summary"] == "Fix the failing test", summary
     print("PASS title-enrichment: carried both ways, absent for unregistered pair")
+
+
+def test_same_harness_title_survives():
+    """Relocating within a harness is documented as lossless; the title is
+    part of that. Before this, no (X, X) enricher existed and it vanished."""
+    for harness, key in (("claude", "ai_title"), ("codex", "thread_name"),
+                         ("opencode", "opencode_title"), ("grok", "grok_title")):
+        s = sample()
+        s.extra["title"] = "keep me"
+        enrich(harness, harness, s)
+        got = s.extra.get("out", {}).get(key)
+        assert got == "keep me", f"{harness}->{harness} lost the title ({key}={got!r})"
+    print("PASS same-harness-title: claude/codex/opencode/grok keep their title")
 
 
 def test_opencode_write_invariants(tmp):
@@ -964,6 +979,7 @@ if __name__ == "__main__":
         test_claude_write_invariants(tmp)
         test_roundtrip_preserves_conversation(tmp)
         test_title_enrichment(tmp)
+        test_same_harness_title_survives()
         test_opencode_write_invariants(tmp)
         test_opencode_read(tmp)
         test_cursor_read(tmp)
